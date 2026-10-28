@@ -51,6 +51,20 @@ python generador.py
 - **Generar .tap** crea la cinta; **Probar en emulador** la abre directamente.
 - Las cintas se cargan en el emulador en modo **128K** (*Tape Loader*).
 
+## Ejecutable sin Python
+
+El generador se puede empaquetar con [PyInstaller](https://pyinstaller.org/) en un único
+ejecutable que no necesita Python instalado:
+
+```bash
+cd zxgen
+pip install pyinstaller pillow
+python construir_exe.py
+```
+
+Deja `zxgen/dist/zxgen.exe` (o `zxgen` en Linux/macOS). PyInstaller no compila de forma cruzada:
+el ejecutable de cada sistema se construye en ese sistema.
+
 ## Estructura del repositorio
 
 ```
@@ -77,6 +91,7 @@ python generador.py
     ├── motor_bin.py                   Motor ensamblado (generado, no editar)
     ├── construir_motor_pyz80.py       Reensambla el motor con pyz80
     ├── construir_motor.py             Reensambla el motor con pasmo
+    ├── construir_exe.py               Empaqueta el generador en un ejecutable (PyInstaller)
     ├── asm/                           Fuentes Z80: motor, cargador y reproductor PT3
     ├── herramientas/                  Conversor AY → PT3 y extractor de música
     ├── LEEME_NOVEDADES.md             Novedades por versión
