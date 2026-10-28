@@ -113,7 +113,6 @@ firmar. La configuración del artefacto para SignPath está en `.signpath/config
 ├── LEEME.txt                          Guía rápida
 ├── LICENSE                            Licencia MIT
 ├── Manual_Generador_ZX_Spectrum.pdf   Manual completo
-├── Manual_Generador_ZX_Spectrum.docx  Fuente editable del manual
 ├── ejemplos/                          Proyectos .json de ejemplo
 │   ├── musica/                        Módulos .pt3
 │   └── pantallas/                     Pantallas de carga y título (.png / .scr)
@@ -185,9 +184,7 @@ En `zxgen/herramientas/` (requieren `pip install z80`):
 ## Documentación
 
 - [`LEEME.txt`](LEEME.txt): guía rápida.
-- [`Manual_Generador_ZX_Spectrum.pdf`](Manual_Generador_ZX_Spectrum.pdf): manual completo. Se
-  exporta desde [`Manual_Generador_ZX_Spectrum.docx`](Manual_Generador_ZX_Spectrum.docx), que es
-  la versión editable; al cambiar el manual hay que volver a exportar el PDF.
+- [`Manual_Generador_ZX_Spectrum.pdf`](Manual_Generador_ZX_Spectrum.pdf): manual completo.
 - [`zxgen/LEEME_NOVEDADES.md`](zxgen/LEEME_NOVEDADES.md): animaciones, efectos, puertas,
   personajes que hablan, láser y memoria dinámica.
 - [`zxgen/LEEME_MODO_MEZCLA.md`](zxgen/LEEME_MODO_MEZCLA.md): modo mezcla y TERRA ZX.
