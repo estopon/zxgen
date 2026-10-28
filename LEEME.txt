@@ -1,0 +1,30 @@
+GENERADOR DE JUEGOS PARA ZX SPECTRUM 128K
+=========================================
+
+Contenido
+---------
+zxgen/        El generador y el motor.
+              python generador.py        abre el editor (necesita Pillow: pip install pillow)
+              asm/motor.asm              el motor en ensamblador Z80
+              python construir_motor_pyz80.py   lo reensambla (pip install pyz80) y crea motor_bin.py
+              sonido.py                  efectos de sonido (canal C del AY)
+              herramientas/              conversor AY -> PT3 y extractor de musica (pip install z80)
+              LEEME_NOVEDADES.md         animaciones, efectos, puertas, personajes que hablan, interfaz
+              LEEME_MODO_MEZCLA.md       modo mezcla (estilo Super Mario Bros 128K) y TERRA ZX
+
+ejemplos/     Proyectos (.json) que se abren con Archivo > Abrir, con su musica y pantallas.
+juegos/       Las cintas .tap de cada ejemplo, generadas con el motor de esta version.
+              Se cargan en un emulador en modo 128K (Tape Loader).
+
+Ejemplos
+--------
+terra_zx                  plataformas en modo mezcla: amuleto, sabio que habla, puerta con llave
+mezcla_zx                 demo del modo mezcla
+templo_plataformas, saltamontes_plataformas, patrulla_plataformas
+nebulosa_horizontal, patrulla_horizontal, estrella_naves
+asalto_vertical, comando_vertical, patrulla_vertical
+punos_beat_em_up
+
+Los efectos de sonido van en el banco 6 junto a la musica. asalto_vertical y comando_vertical
+llevan un juego de efectos ligero (38 bytes) y punos_beat_em_up va sin efectos, porque sus fases
+ya llenaban la memoria. Si acortas sus fases puedes ponerles todos en la pestana Sonido.

@@ -1,0 +1,3 @@
+__pycache__/
+*.pyc
+zxgen/asm/*.bin
