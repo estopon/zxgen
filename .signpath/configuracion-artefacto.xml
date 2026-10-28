@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Configuración del artefacto para el proyecto zxgen en SignPath.
+     El workflow envía un artefacto de GitHub (un zip) con zxgen-windows.exe en la raíz;
+     SignPath firma ese ejecutable con Authenticode. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="zxgen-windows.exe">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

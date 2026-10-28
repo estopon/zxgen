@@ -53,6 +53,28 @@ python generador.py
 
 ## Ejecutable sin Python
 
+### Descargar
+
+En la página [Releases](https://github.com/estopon/zxgen/releases/latest) hay un ejecutable para
+cada sistema que no necesita Python:
+
+| Sistema | Archivo | Cómo abrirlo |
+|---|---|---|
+| Windows | `zxgen-windows.exe` | Doble clic |
+| Linux | `zxgen-linux.tar.gz` | Descomprimir y ejecutar `./zxgen` |
+| macOS | `zxgen-macos.zip` | Descomprimir y abrir `zxgen.app` |
+
+Los ejecutables no van firmados, así que el sistema avisa la primera vez que se abren:
+
+- **Windows**: si aparece *Windows protegió su PC*, pulsa **Más información → Ejecutar de todas
+  formas**. Si el navegador dice que el archivo *no se descarga habitualmente*, elige
+  **Conservar** en el menú de la descarga.
+- **macOS**: si dice que no se puede abrir porque no se puede verificar el desarrollador, haz clic
+  derecho sobre `zxgen.app` y elige **Abrir**, o permítelo en **Ajustes del Sistema → Privacidad y
+  seguridad**.
+
+### Construir
+
 El generador se puede empaquetar con [PyInstaller](https://pyinstaller.org/) en un único
 ejecutable que no necesita Python instalado:
 
@@ -77,14 +99,19 @@ git push origin v1.0.0
 
 Las descargas quedan en la página *Releases* del repositorio. También se puede lanzar a mano
 desde la pestaña *Actions* para construir los ejecutables sin publicar nada; quedan como
-artefactos de la ejecución. Los ejecutables no van firmados, así que Windows SmartScreen y
-macOS Gatekeeper pueden avisar al abrirlos la primera vez.
+artefactos de la ejecución.
+
+El workflow ya incluye el paso para firmar el ejecutable de Windows con
+[SignPath](https://about.signpath.io/), pero solo actúa si el repositorio tiene configurados la
+variable `SIGNPATH_ORGANIZATION_ID` y el secreto `SIGNPATH_API_TOKEN`; sin ellos se publica sin
+firmar. La configuración del artefacto para SignPath está en `.signpath/configuracion-artefacto.xml`.
 
 ## Estructura del repositorio
 
 ```
 .
 ├── LEEME.txt                          Guía rápida
+├── LICENSE                            Licencia MIT
 ├── Manual_Generador_ZX_Spectrum.docx  Manual completo
 ├── ejemplos/                          Proyectos .json de ejemplo
 │   ├── musica/                        Módulos .pt3
@@ -168,6 +195,7 @@ En `zxgen/herramientas/` (requieren `pip install z80`):
 
 ## Licencias y créditos
 
+- El generador y el motor tienen licencia [MIT](LICENSE).
 - El reproductor PT3 es obra de **Sergey Bulba**.
 - La música de `ejemplos/musica/` tiene licencia MIT (© 2026 Miguel Ángel Esteve Marco); ver
   [`LICENCIA_spectrumizer.txt`](ejemplos/musica/LICENCIA_spectrumizer.txt).

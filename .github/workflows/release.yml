@@ -1,6 +1,8 @@
 # Construye el ejecutable del generador en Windows, Linux y macOS.
 # Al subir una etiqueta v* (git tag v1.0.0 && git push origin v1.0.0) publica una release
 # con los tres ejecutables. Lanzado a mano solo construye y deja los ficheros como artefactos.
+# En las releases, el ejecutable de Windows se firma con SignPath si la variable del
+# repositorio SIGNPATH_ORGANIZATION_ID y el secreto SIGNPATH_API_TOKEN están configurados.
 name: Ejecutables
 
 on:
@@ -20,6 +22,8 @@ jobs:
           - os: macos-latest
             fichero: zxgen-macos.zip
     runs-on: ${{ matrix.os }}
+    env:
+      FIRMAR: ${{ startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -37,6 +41,34 @@ jobs:
       - name: Empaquetar (Windows)
         if: runner.os == 'Windows'
         run: mv zxgen/dist/zxgen.exe ${{ matrix.fichero }}
+        shell: bash
+
+      - name: Subir sin firmar (Windows)
+        id: sin-firmar
+        if: runner.os == 'Windows' && env.FIRMAR == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.fichero }}-sin-firmar
+          path: ${{ matrix.fichero }}
+          if-no-files-found: error
+
+      # La política release-signing pide aprobación manual en SignPath: se espera hasta una hora
+      - name: Firmar con SignPath (Windows)
+        if: steps.sin-firmar.outcome == 'success'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: zxgen
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.sin-firmar.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: firmado
+
+      - name: Usar el ejecutable firmado (Windows)
+        if: steps.sin-firmar.outcome == 'success'
+        run: mv -f firmado/${{ matrix.fichero }} ${{ matrix.fichero }}
         shell: bash
 
       - name: Empaquetar (Linux)
