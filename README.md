@@ -132,6 +132,10 @@ En `zxgen/herramientas/` (requieren `pip install z80`):
   personajes que hablan, láser y memoria dinámica.
 - [`zxgen/LEEME_MODO_MEZCLA.md`](zxgen/LEEME_MODO_MEZCLA.md): modo mezcla y TERRA ZX.
 
+## Autor
+
+**Manuel Rico**
+
 ## Licencias y créditos
 
 - El reproductor PT3 es obra de **Sergey Bulba**.
