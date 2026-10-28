@@ -77,14 +77,28 @@ git push origin v1.0.0
 
 Las descargas quedan en la página *Releases* del repositorio. También se puede lanzar a mano
 desde la pestaña *Actions* para construir los ejecutables sin publicar nada; quedan como
-artefactos de la ejecución. Los ejecutables no van firmados, así que Windows SmartScreen y
-macOS Gatekeeper pueden avisar al abrirlos la primera vez.
+artefactos de la ejecución. En las releases, el ejecutable de Windows se firma con SignPath
+(ver [Política de firma de código](#política-de-firma-de-código)); el de macOS no va firmado,
+así que Gatekeeper puede avisar al abrirlo la primera vez.
+
+### Política de firma de código
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
+- Solo se firman los ejecutables construidos por GitHub Actions a partir de este repositorio.
+- Autores y revisores: [miembros del repositorio](https://github.com/estopon/zxgen/graphs/contributors).
+- Aprobadores de cada firma: [estopon](https://github.com/estopon).
+
+**Privacidad**: este programa no envía información a ningún otro sistema de la red salvo que el
+usuario lo pida expresamente.
 
 ## Estructura del repositorio
 
 ```
 .
 ├── LEEME.txt                          Guía rápida
+├── LICENSE                            Licencia MIT
 ├── Manual_Generador_ZX_Spectrum.docx  Manual completo
 ├── ejemplos/                          Proyectos .json de ejemplo
 │   ├── musica/                        Módulos .pt3
@@ -168,6 +182,7 @@ En `zxgen/herramientas/` (requieren `pip install z80`):
 
 ## Licencias y créditos
 
+- El generador y el motor tienen licencia [MIT](LICENSE).
 - El reproductor PT3 es obra de **Sergey Bulba**.
 - La música de `ejemplos/musica/` tiene licencia MIT (© 2026 Miguel Ángel Esteve Marco); ver
   [`LICENCIA_spectrumizer.txt`](ejemplos/musica/LICENCIA_spectrumizer.txt).
