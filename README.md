@@ -62,7 +62,7 @@ pip install pyinstaller pillow
 python construir_exe.py
 ```
 
-Deja `zxgen/dist/zxgen.exe` (o `zxgen` en Linux/macOS). PyInstaller no compila de forma cruzada:
+Deja `zxgen/dist/zxgen.exe` (`zxgen` en Linux, `zxgen.app` en macOS). PyInstaller no compila de forma cruzada:
 el ejecutable de cada sistema se construye en ese sistema.
 
 ### Publicar una versión
