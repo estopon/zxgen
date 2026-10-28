@@ -1,0 +1,75 @@
+# Construye el ejecutable del generador en Windows, Linux y macOS.
+# Al subir una etiqueta v* (git tag v1.0.0 && git push origin v1.0.0) publica una release
+# con los tres ejecutables. Lanzado a mano solo construye y deja los ficheros como artefactos.
+name: Ejecutables
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  construir:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            fichero: zxgen-windows.exe
+          - os: ubuntu-latest
+            fichero: zxgen-linux.tar.gz
+          - os: macos-latest
+            fichero: zxgen-macos.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Instalar dependencias
+        run: pip install pyinstaller pillow
+
+      - name: Construir
+        working-directory: zxgen
+        run: python construir_exe.py
+
+      - name: Empaquetar (Windows)
+        if: runner.os == 'Windows'
+        run: mv zxgen/dist/zxgen.exe ${{ matrix.fichero }}
+        shell: bash
+
+      - name: Empaquetar (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf ${{ matrix.fichero }} -C zxgen/dist zxgen
+
+      - name: Empaquetar (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent zxgen/dist/zxgen.app ${{ matrix.fichero }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.fichero }}
+          path: ${{ matrix.fichero }}
+          if-no-files-found: error
+
+  publicar:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: construir
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ficheros
+          merge-multiple: true
+
+      - name: Crear la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" ficheros/*
+          --repo "$GITHUB_REPOSITORY"
+          --title "zxgen ${GITHUB_REF_NAME#v}"
+          --generate-notes

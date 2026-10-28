@@ -65,6 +65,21 @@ python construir_exe.py
 Deja `zxgen/dist/zxgen.exe` (o `zxgen` en Linux/macOS). PyInstaller no compila de forma cruzada:
 el ejecutable de cada sistema se construye en ese sistema.
 
+### Publicar una versión
+
+El workflow `.github/workflows/release.yml` construye los ejecutables de Windows, Linux y macOS
+y los publica en una release de GitHub al subir una etiqueta `v*`:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Las descargas quedan en la página *Releases* del repositorio. También se puede lanzar a mano
+desde la pestaña *Actions* para construir los ejecutables sin publicar nada; quedan como
+artefactos de la ejecución. Los ejecutables no van firmados, así que Windows SmartScreen y
+macOS Gatekeeper pueden avisar al abrirlos la primera vez.
+
 ## Estructura del repositorio
 
 ```
