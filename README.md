@@ -53,6 +53,28 @@ python generador.py
 
 ## Ejecutable sin Python
 
+### Descargar
+
+En la página [Releases](https://github.com/estopon/zxgen/releases/latest) hay un ejecutable para
+cada sistema que no necesita Python:
+
+| Sistema | Archivo | Cómo abrirlo |
+|---|---|---|
+| Windows | `zxgen-windows.exe` | Doble clic |
+| Linux | `zxgen-linux.tar.gz` | Descomprimir y ejecutar `./zxgen` |
+| macOS | `zxgen-macos.zip` | Descomprimir y abrir `zxgen.app` |
+
+Los ejecutables no van firmados, así que el sistema avisa la primera vez que se abren:
+
+- **Windows**: si aparece *Windows protegió su PC*, pulsa **Más información → Ejecutar de todas
+  formas**. Si el navegador dice que el archivo *no se descarga habitualmente*, elige
+  **Conservar** en el menú de la descarga.
+- **macOS**: si dice que no se puede abrir porque no se puede verificar el desarrollador, haz clic
+  derecho sobre `zxgen.app` y elige **Abrir**, o permítelo en **Ajustes del Sistema → Privacidad y
+  seguridad**.
+
+### Construir
+
 El generador se puede empaquetar con [PyInstaller](https://pyinstaller.org/) en un único
 ejecutable que no necesita Python instalado:
 
@@ -77,21 +99,12 @@ git push origin v1.0.0
 
 Las descargas quedan en la página *Releases* del repositorio. También se puede lanzar a mano
 desde la pestaña *Actions* para construir los ejecutables sin publicar nada; quedan como
-artefactos de la ejecución. En las releases, el ejecutable de Windows se firma con SignPath
-(ver [Política de firma de código](#política-de-firma-de-código)); el de macOS no va firmado,
-así que Gatekeeper puede avisar al abrirlo la primera vez.
+artefactos de la ejecución.
 
-### Política de firma de código
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/).
-
-- Solo se firman los ejecutables construidos por GitHub Actions a partir de este repositorio.
-- Autores y revisores: [miembros del repositorio](https://github.com/estopon/zxgen/graphs/contributors).
-- Aprobadores de cada firma: [estopon](https://github.com/estopon).
-
-**Privacidad**: este programa no envía información a ningún otro sistema de la red salvo que el
-usuario lo pida expresamente.
+El workflow ya incluye el paso para firmar el ejecutable de Windows con
+[SignPath](https://about.signpath.io/), pero solo actúa si el repositorio tiene configurados la
+variable `SIGNPATH_ORGANIZATION_ID` y el secreto `SIGNPATH_API_TOKEN`; sin ellos se publica sin
+firmar. La configuración del artefacto para SignPath está en `.signpath/configuracion-artefacto.xml`.
 
 ## Estructura del repositorio
 
