@@ -3,9 +3,10 @@
     pip install pyinstaller pillow
     python construir_exe.py
 
-Deja el ejecutable en dist/ (zxgen.exe en Windows, zxgen en Linux/macOS).
+Deja el ejecutable en dist/ (zxgen.exe en Windows, zxgen en Linux, zxgen.app en macOS).
 El motor Z80 va embebido en motor_bin.py, así que no hace falta copiar datos.
 PyInstaller no compila de forma cruzada: hay que construir en cada sistema.
+En macOS un .app ya es una carpeta, así que no se empaqueta en un solo fichero.
 """
 import os, shutil, sys
 
@@ -18,7 +19,7 @@ if __name__ == '__main__':
     PyInstaller.__main__.run([
         os.path.join(AQUI, 'generador.py'),
         '--name', 'zxgen',
-        '--onefile',
+        '--onedir' if sys.platform == 'darwin' else '--onefile',
         '--windowed',
         '--noconfirm',
         '--clean',
