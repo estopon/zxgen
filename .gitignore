@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 zxgen/asm/*.bin
+zxgen/dist/
+zxgen/build/
