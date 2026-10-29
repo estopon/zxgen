@@ -39,6 +39,36 @@ cabnivel equ 0xBF01         ; cabecera de la fase (32 bytes), en el hueco libre 
 buf_msg equ 0xBF21          ; texto de los mensajes (24 bytes)
 golpe_z equ 0xBF39          ; zona del golpe (una ficha de sprite, SLOT bytes)
 caja_t  equ 0xBF5A          ; caja barrida de una bala (SLOT bytes; se usan x, y, ancho y alto)
+EXT     equ 0xBF7C          ; 8 bytes tras la cabecera de la fase: tiles de 8x8 y profundidad
+EXT_META equ EXT+0          ; celda de cada cuarto de cada tile (tiles de 8x8)
+EXT_TRASM equ EXT+2         ; tile que queda al cambiar cada cuarto
+EXT_PROF equ EXT+4          ; tabla de profundidad
+EXT_T8  equ EXT+6           ; 1 = tiles de 8x8
+EXT_FLG equ EXT+7           ; bits 0-3: bordes con lineas que no se traspasan; bit 4: hay profundidad
+PRFG    equ 0xBF84          ; dibujo y colores del tile que se redibuja (36 bytes)
+VPRF    equ 0xBFA8          ; variables de la profundidad (21 bytes, hasta 0xBFBC)
+prf_n   equ VPRF+0
+ps_x0   equ VPRF+1
+ps_x1   equ VPRF+2
+ps_y0   equ VPRF+3
+ps_y1   equ VPRF+4
+ps_px   equ VPRF+5
+ps_py   equ VPRF+6
+ps_meta equ VPRF+7
+ps_id   equ VPRF+8
+ps_cx16 equ VPRF+9
+ps_cy16 equ VPRF+10
+ps_mx16 equ VPRF+11
+ps_my16 equ VPRF+12
+pr_sx   equ VPRF+13
+pr_sy   equ VPRF+14
+pc_l    equ VPRF+15
+rp_y    equ VPRF+17
+rp_s    equ VPRF+18
+rp_t    equ VPRF+19
+pc_op   equ VPRF+20         ; opciones de la linea en curso (bit 3: lado invertido)
+PRFL    equ 0x8680          ; trozos de tiles de profundidad que tapan sprites (7 bytes cada uno)
+PRFMAX  equ 18
 
 ANCHO   equ 24              ; ancho del area de juego en bytes
 ALTO    equ 20              ; alto en caracteres
@@ -167,6 +197,7 @@ C_LDUR    equ conf+280        ; fotogramas que se ve
 C_LALC    equ conf+281        ; alcance maximo en px (0 = hasta el borde)
 C_LPAT    equ conf+282        ; dibujo: un byte por linea (se repite cada 8 px)
 C_LANIM   equ conf+285        ; 1 = el dibujo avanza un pixel por fotograma
+C_ATRC    equ conf+286        ; scroll libre: atributo del area (fondo de dos colores)
 C_ACEL    equ conf+263        ; inercia (plataformas): aceleracion en 1/16 px por fotograma (0 = sin inercia)
 C_FRENO   equ conf+264        ; y frenada
 C_SFX     equ conf+247        ; 8 efectos de sonido (direcciones en el banco 6, 0 = ninguno):
@@ -352,6 +383,29 @@ nivel_inicio:
         ld de,cabnivel          ; cabecera de la fase a RAM
         ld bc,32
         ldir
+        ld de,EXT               ; y los 8 bytes que la siguen (si el bit 7 del ritmo dice que estan;
+        ld bc,8                 ; si no, a cero)
+        ld a,(N_RITMO)
+        add a,a
+        jr c,nic0
+        xor a
+        ld (de),a
+        ld h,d
+        ld l,e
+        inc de
+        dec bc
+nic0:   ldir
+        ld a,(EXT_T8)           ; celdas de 16 u 8 pixeles
+        or a
+        ld a,16
+        jr z,nic1
+        ld a,8
+nic1:   ld (csz),a
+        dec a
+        ld (cmsk),a
+        ld (cbs1+1),a           ; (los puntos de las cajas se miran cada celda)
+        ld (cbs2+1),a
+        ld (ffs1+1),a
         ld a,(N_COL)
         ld (pcol),a
         ld a,(N_FILA)
@@ -391,6 +445,15 @@ ni_sin: xor a
         ld (tiles),hl
         ld hl,(N_MAPA)
         ld (mapa),hl
+;@ SOLO D
+        ld hl,(N_PARMAP)        ; pantalla a pantalla: rejilla de salas y sala inicial
+        ld (salas),hl
+        ld a,(N_PARLIST)
+        ld (sala_x),a
+        ld a,(N_PARLIST+1)
+        ld (sala_y),a
+        call sala_segura
+;@ FIN
         ld a,(N_COL)
         ld (pcol),a
         ld a,(N_FILA)
@@ -420,11 +483,16 @@ ni_sin: xor a
         ld (bloques),a
         ld hl,(col_entrada)     ; columna de caracteres por la que se entra (puertas; horizontal)
         ld (izq),hl
+;@ SOLO D
+        ld hl,0                 ; (pantalla a pantalla: siempre la sala entera)
+        ld (izq),hl
+;@ FIN
         ld hl,0
         ld (col_entrada),hl
         ld hl,LTAB
         ld (ltab_act),hl
         ld a,(N_RITMO)
+        and 0x7F
         ld (ritmo),a
         ld a,(dir)
         or a
@@ -482,7 +550,7 @@ ini_filas:
         jr ini_fondo_ok
 ;@ FIN
         ; --- horizontal: se empieza a la izquierda ---
-;@ SOLO H B
+;@ SOLO H B D
 ini_h:  ld a,(N_PASO)
         ld (paso_h),a
         cp 8
@@ -492,7 +560,7 @@ ini_h:  ld a,(N_PASO)
         call ini_bloques
         jp ini_fondo_ok
 ;@ FIN
-;@ SOLO H
+;@ SOLO H D
 ini_h8: ld a,ANCHO*2            ; --- horizontal de 8 en 8 ---
         ld c,1
         ld b,160
@@ -629,6 +697,7 @@ bucle:
         call mover_enemigos
         call mover_balas
         call colisiones
+        call profundidad
         ld a,4                  ; dibujo con el banco 4 (sprites) paginado
         call pon_banco
         call fotograma_jugador
@@ -637,6 +706,7 @@ bu_dib: ld a,(bloques)
         or a
         jr nz,bu_bloques
         call dibujar_sprites
+        call restaurar_prof     ; (los tiles de profundidad que tapan a los sprites)
         call dibujar_laser      ; (con XOR en el anillo)
         call volcar
         call dibujar_laser      ; (otra vez: lo borra)
@@ -652,7 +722,9 @@ bu_bloques:
 bu_b1:  ld (ltab_act),hl
         call dibujar_sprites
         call dibujar_laser
+        call restaurar_prof
         call pintar_atrs        ; color propio de los personajes (si esta activo)
+        call atr_prof
 bu_fin:
         ld hl,reloj
         inc (hl)
@@ -679,6 +751,8 @@ espera:
 bu_muerte:
         dec a
         ld (muerte),a
+        ld hl,prf_n             ; (durante la animacion no se mira la profundidad)
+        ld (hl),0
         ld ix,sprites
         jr z,mue_fin
         cp 32
@@ -887,6 +961,7 @@ mj6:    ld a,1
 ; ------------------------------------------------------------
 ;  DECISION DE SCROLL (IX = jugador)
 ; ------------------------------------------------------------
+;@ SOLO V H B
 desplazar:
         ld a,(auto)
         or a
@@ -1018,6 +1093,2335 @@ dz_h2r: ld a,(retro)
         dec (hl)
         jr nz,dz_h2r
         ret
+
+;@ FIN
+;@ SOLO D
+; ------------------------------------------------------------
+;  PANTALLA A PANTALLA: al llegar a un borde empujando hacia fuera se pasa a la sala de al lado
+;  (si existe en la rejilla de la fase). En plataformas, arriba y abajo se pasa al saltar o caer
+;  (subir y bajar llaman a sala_arriba y sala_abajo).
+; ------------------------------------------------------------
+desplazar:
+        ld a,(entrada_j)
+        ld (ds_ent),a
+        bit 0,a                 ; derecha
+        jr z,dsd1
+        ld a,(ix+S_X)
+        add a,(ix+S_WP)
+        cp 192-3
+        jr c,dsd1
+        ld bc,0x0100
+        call cambiar_sala
+        jr nc,dsd1
+        ld (ix+S_X),0
+        jr ds_seguro
+dsd1:   ld a,(ds_ent)           ; izquierda
+        bit 1,a
+        jr z,dsd2
+        ld a,(ix+S_X)
+        cp 4
+        jr nc,dsd2
+        ld bc,0xFF00
+        call cambiar_sala
+        jr nc,dsd2
+        ld a,(ix+S_WP)
+        neg
+        add a,192
+        ld (ix+S_X),a
+        jr ds_seguro
+dsd2:   ld a,(C_PLAT)
+        or a
+        ret nz
+        ld a,(ds_ent)           ; arriba
+        bit 3,a
+        jr z,dsd3
+        ld a,(ix+S_Y)
+        cp 4
+        jr nc,dsd3
+        ld bc,0x00FF
+        call cambiar_sala
+        jr nc,dsd3
+        ld a,(ix+S_H)
+        neg
+        add a,ALTO*8
+        ld (ix+S_Y),a
+        jr ds_seguro
+dsd3:   ld a,(ds_ent)           ; abajo
+        bit 2,a
+        ret z
+        ld a,(ix+S_Y)
+        add a,(ix+S_H)
+        cp ALTO*8-3
+        ret c
+        ld bc,0x0001
+        call cambiar_sala
+        ret nc
+        ld (ix+S_Y),0
+ds_seguro:                      ; punto de reaparicion: donde se entra en la sala (en plataformas, el
+        ld a,(C_PLAT)           ; ultimo suelo firme, aunque sea de otra sala: si no, al entrar sobre un
+        or a                    ; foso se moriria una y otra vez)
+        ret nz
+        ld a,(ix+S_X)
+        ld (seguro_x),a
+        ld a,(ix+S_Y)
+        ld (seguro_y),a
+sala_segura:
+        ld a,(sala_x)
+        ld (seg_sx),a
+        ld a,(sala_y)
+        ld (seg_sy),a
+        ret
+
+; volver_sala: a la sala del punto seguro (si no es la actual)
+volver_sala:
+        ld a,(seg_sx)
+        ld hl,sala_x
+        sub (hl)
+        ld b,a
+        ld a,(seg_sy)
+        ld hl,sala_y
+        sub (hl)
+        ld c,a
+        or b
+        ret z
+        jp cambiar_sala
+
+; sala_arriba / sala_abajo (plataformas, desde subir y bajar): NZ si se ha cambiado de sala
+sala_arriba:
+        push bc
+        ld bc,0x00FF
+        call cambiar_sala
+        pop bc
+        jr nc,sal_no
+        ld a,(ix+S_H)
+        neg
+        add a,ALTO*8
+        ld (ix+S_Y),a
+        call ds_seguro
+        ld a,(ix+S_Y)           ; (subir sigue con A = y)
+        or a
+        ret
+sala_abajo:
+        push bc
+        ld bc,0x0001
+        call cambiar_sala
+        pop bc
+        jr nc,sal_no
+        ld (ix+S_Y),0
+        call ds_seguro
+        or 1
+        ret
+sal_no: xor a
+        ret
+
+; cambiar_sala: B = dx, C = dy (-1, 0 o 1). CF=1 si hay sala en esa direccion (y ya se esta en ella).
+; (salas): ancho y alto de la rejilla, tabla de salas (4 bytes cada una: mapa y apariciones) y la
+; rejilla (ancho x alto bytes: numero de sala + 1, o 0 si no hay)
+cambiar_sala:
+        ld hl,(salas)
+        ld a,(sala_x)
+        add a,b
+        cp (hl)
+        ret nc                  ; fuera de la rejilla (-1 = 255 tambien)
+        ld d,a
+        inc hl
+        ld a,(sala_y)
+        add a,c
+        cp (hl)
+        ret nc
+        ld e,a
+        dec hl
+        ld c,(hl)               ; C = ancho de la rejilla
+        ld a,d                  ; A = fila * ancho + columna
+        ld b,e
+        inc b
+cs1:    dec b
+        jr z,cs2
+        add a,c
+        jr cs1
+cs2:    ld hl,(salas)
+        inc hl
+        inc hl
+        inc hl
+        inc hl
+        add a,l
+        ld l,a
+        adc a,h
+        sub l
+        ld h,a
+        ld a,(hl)
+        or a
+        ret z                   ; no hay sala (CF=0)
+        dec a
+        push af
+        ld a,d
+        ld (sala_x),a
+        ld a,e
+        ld (sala_y),a
+        ld hl,(salas)
+        inc hl
+        inc hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)               ; DE = tabla de salas
+        pop af
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        inc hl
+        ld (mapa),de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ld (apar),de
+        ld (N_APAR),de          ; (aparecer no rebobina mas alla del principio de su lista)
+        call entrar_sala
+        scf
+        ret
+
+; entrar_sala: quita enemigos, balas y laser, y pinta la sala nueva en el anillo
+entrar_sala:
+        push ix
+        ld ix,sprites+SLOT
+        ld a,(n_spr)
+        dec a
+        ld b,a
+        ld de,SLOT
+es1:    ld (ix+S_ACT),0
+        add ix,de
+        djnz es1
+        xor a
+        ld (las_t),a
+        ld (las_vis),a
+        ld (c0),a
+        ld hl,0
+        ld (ap_l),hl
+        ld (ap_lv),hl
+        ld b,0
+es2:    push bc
+        ld a,b
+        ld (anillo),a
+        ld l,b
+        ld h,0
+        ld (fmundo),hl
+        call pintar_col
+        pop bc
+        inc b
+        ld a,b
+        cp ANCHO
+        jr nz,es2
+        ld a,2
+        ld (cnt_atr),a
+        pop ix
+        ret
+
+ds_ent:    db 0
+seg_sx:    db 0
+seg_sy:    db 0
+sala_x:    db 0
+sala_y:    db 0
+salas:     dw 0
+;@ FIN
+
+;@ SOLO C
+; ------------------------------------------------------------
+;  SCROLL LIBRE EN 8 DIRECCIONES (variante C)
+;  La camara se mueve pixel a pixel en vertical y de 2 en 2 en horizontal (como los sprites).
+;  El fondo es de dos colores: el atributo del area no cambia nunca, asi no hay choque de color.
+;  Esta en 4 copias, desplazadas 0, 2, 4 y 6 pixeles a la izquierda; cada copia es un anillo de
+;  160 lineas x 24 bytes en las dos direcciones: la columna de bytes w del mundo va en la columna
+;  w mod 24 del anillo, y la linea l en la linea l mod 160. Asi, al moverse la camara solo se
+;  construye la columna o las lineas que entran, y el volcado copia la copia que toca.
+;  Copias: 0x6000 y 0x6F00 (memoria baja), 0xDB00 y 0xEA00 (banco 7, tras la pantalla oculta).
+; ------------------------------------------------------------
+COP0    equ 0x6000
+SCRC    equ 0x8700          ; grafico del sprite en curso (hasta 320 bytes)
+WBC     equ 0x8840          ; columna en construccion: 2 bytes por linea (160 lineas)
+WBF     equ 0x8980          ; linea en construccion: 25 bytes
+ROWT    equ 0x89A0          ; direccion de cada fila del mapa (hasta 160 filas)
+
+; inicio de fase (desde nivel_inicio)
+ini_h:  ld a,2
+        ld (paso_h),a
+        ld a,1
+        ld (bloques),a
+        ld hl,(N_PARMAP)        ; ancho del mapa en tiles y largo de cada fila (2^k)
+        ld a,l
+        ld (map_w),a
+        ld a,h
+        ld (map_sh),a
+        ld hl,1
+        or a
+        jr z,ih0
+ihs:    add hl,hl
+        dec a
+        jr nz,ihs
+ih0:    ld (stride),hl
+        ld a,(map_w)            ; limites de la camara
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld de,-192
+        add hl,de
+        ld (cmx),hl
+        ld hl,(N_FILAS)
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld de,-160
+        add hl,de
+        ld (cmy),hl
+        ld de,(mapa)            ; tabla de filas del mapa
+        ld ix,ROWT
+        ld a,(N_FILAS)
+        ld b,a
+ih1:    ld (ix+0),e
+        ld (ix+1),d
+        inc ix
+        inc ix
+        ld hl,(stride)
+        add hl,de
+        ex de,hl
+        djnz ih1
+        ld a,(N_PARLIST)        ; pantalla inicial: x = columna*192, y = fila*160
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld d,h
+        ld e,l
+        add hl,hl
+        add hl,de
+        ld (cam_x),hl
+        ld a,(N_PARLIST+1)
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld d,h
+        ld e,l
+        add hl,hl
+        add hl,hl
+        add hl,de
+        ld (cam_y),hl
+        xor a
+        ld (rcol),a
+        ld (rlin),a
+        call cam_partes
+        ld b,0x40               ; tablas de lineas de las dos pantallas
+        ld hl,LTAB
+        call ltab_pantalla
+        ld b,0xC0
+        call ltab_pantalla
+        call color_area
+        ld b,0                  ; las 24 columnas de la vista
+ih2:    push bc
+        ld hl,(cam_x)
+        call div8
+        ld e,b
+        ld d,0
+        add hl,de
+        ld (cc_w),hl
+        ld hl,(cam_y)
+        ld (cc_l),hl
+        ld a,160
+        ld (cc_n),a
+        call construir_col
+        pop bc
+        inc b
+        ld a,b
+        cp ANCHO
+        jr nz,ih2
+        call ap_reset
+        jp ini_fondo_ok
+
+div8:   srl h
+        rr l
+        srl h
+        rr l
+        srl h
+        rr l
+        ret
+
+; cam_partes: parte alta (en tiles) y baja (0-15) de la posicion de la camara
+cam_partes:
+        ld hl,(cam_x)
+        ld a,l
+        and 15
+        ld (cx_lo),a
+        call div16
+        ld a,l
+        ld (cx_hi),a
+        ld hl,(cam_y)
+        ld a,l
+        and 15
+        ld (cy_lo),a
+        call div16
+        ld a,l
+        ld (cy_hi),a
+        ret
+
+; color_area: el atributo del area (dos colores) en las dos pantallas
+color_area:
+        ld a,(C_ATRC)
+        ld (ca_v+1),a
+        ld a,7
+        call pon_banco
+        ld d,0x58
+        call ca_una
+        ld d,0xD8
+        call ca_una
+        ld a,(banco_nivel)
+        jp pon_banco
+ca_una: ld a,(pfila)
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld a,(pcol)
+        add a,l
+        ld l,a
+        ld a,h
+        add a,d
+        ld h,a
+        ld c,ALTO
+ca1:    push hl
+        ld b,ANCHO
+ca_v:   ld a,0
+ca2:    ld (hl),a
+        inc hl
+        djnz ca2
+        pop hl
+        ld de,32
+        add hl,de
+        dec c
+        jr nz,ca1
+        ret
+
+; atr_oculta: el atributo del area en la pantalla oculta (la tinta de los personajes se repinta despues)
+atr_oculta:
+        ld a,(C_ATRC)
+        ld (ca_v+1),a
+        ld a,(base)
+        add a,0x18
+        ld d,a
+        jp ca_una
+
+; ptr_tile: A = tile -> HL = (tiles) + tile*36 + (cc_t2)   (usa DE)
+ptr_tile:
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        ld d,h
+        ld e,l
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,de
+        ld de,(tiles)
+        add hl,de
+        ld a,(cc_t2)
+        ld e,a
+        ld d,0
+        add hl,de
+        ret
+
+; escribe en las 4 copias: D = byte w, E = byte w+1, HL = entrada en la copia 0 (se conserva)
+; (la copia k lleva el par desplazado 2k pixeles a la izquierda)
+esc4:   ld (hl),d
+        ex de,hl
+        add hl,hl
+        add hl,hl
+        ex de,hl
+        ld a,h
+        add a,0x0F
+        ld h,a
+        ld (hl),d
+        ex de,hl
+        add hl,hl
+        add hl,hl
+        ex de,hl
+        ld a,h
+        add a,0x6C
+        ld h,a
+        ld (hl),d
+        ex de,hl
+        add hl,hl
+        add hl,hl
+        ex de,hl
+        ld a,h
+        add a,0x0F
+        ld h,a
+        ld (hl),d
+        ld a,h
+        sub 0x8A
+        ld h,a
+        ret
+
+; construir_col: (cc_w) = columna de bytes del mundo, (cc_l) = primera linea, (cc_n) = lineas (1-160)
+construir_col:
+        ld a,(banco_nivel)      ; 1) con el banco de la fase: los bytes w y w+1 de cada linea en WBC
+        call pon_banco
+        ld hl,(cc_w)
+        ld a,l
+        and 1
+        ld (cc_med),a
+        srl h
+        rr l
+        ld (cc_tc),hl
+        ld iy,WBC
+        ld hl,(cc_l)
+        ld a,(cc_n)
+        ld b,a
+cct0:   push bc
+        push hl
+        ld a,l
+        and 15
+        ld c,a
+        add a,a
+        ld (cc_t2),a
+        ld a,16
+        sub c
+        ld c,a                  ; lineas hasta el final de esta fila de tiles
+        ld a,b
+        cp c
+        jr nc,cct1
+        ld c,a
+cct1:   ld a,c
+        ld (cc_seg),a
+        call div16              ; fila de tiles
+        add hl,hl
+        ld de,ROWT
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ld hl,(cc_tc)
+        add hl,de               ; HL = tile en el mapa
+        ld a,(cc_med)
+        or a
+        jr nz,cct2
+        ld a,(hl)               ; columna par: los dos bytes del mismo tile
+        call ptr_tile
+        ld d,h
+        ld e,l
+        inc de
+        jr cct3
+cct2:   ld a,(hl)               ; impar: derecha de este tile, izquierda del siguiente
+        inc hl
+        ld c,(hl)
+        call ptr_tile
+        inc hl
+        push hl
+        ld a,c
+        call ptr_tile
+        ex de,hl
+        pop hl
+cct3:   ld a,(cc_seg)
+        ld c,a
+cclp:   ld a,(hl)
+        ld (iy+0),a
+        ld a,(de)
+        ld (iy+1),a
+        inc hl
+        inc hl
+        inc de
+        inc de
+        inc iy
+        inc iy
+        dec c
+        jr nz,cclp
+        pop hl
+        ld a,(cc_seg)
+        ld e,a
+        ld d,0
+        add hl,de
+        pop bc
+        ld a,b
+        sub e
+        ld b,a
+        jr nz,cct0
+        ld a,7                  ; 2) en las 4 copias (dos estan en el banco 7)
+        call pon_banco
+        ld hl,(cam_x)           ; columna del anillo = (rcol + w - cx) mod 24
+        call div8
+        ex de,hl
+        ld hl,(cc_w)
+        or a
+        sbc hl,de
+        ld a,(rcol)
+        add a,l
+        cp ANCHO
+        jr c,cct4
+        sub ANCHO
+cct4:   ld (cc_rc),a
+        ld hl,(cc_l)            ; linea del anillo = (rlin + l - cam_y) mod 160
+        ld de,(cam_y)
+        or a
+        sbc hl,de
+        ld a,(rlin)
+        add a,l
+        jr c,cct5
+        cp 160
+        jr c,cct6
+cct5:   sub 160
+cct6:   call dir_anillo
+        ld a,(cc_rc)
+        ld e,a
+        ld d,0
+        add hl,de
+        ld ix,WBC
+        ld a,(cc_n)
+        ld b,a
+cct7:   ld d,(ix+0)
+        ld e,(ix+1)
+        inc ix
+        inc ix
+        call esc4
+        ld de,ANCHO
+        add hl,de
+        ld a,h
+        cp 0x6F
+        jr c,cct8
+        sub 0x0F
+        ld h,a
+cct8:   djnz cct7
+        ld a,(banco_nivel)
+        jp pon_banco
+
+; dir_anillo: A = linea del anillo -> HL = COP0 + A*24
+dir_anillo:
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld d,h
+        ld e,l
+        add hl,hl
+        add hl,de
+        ld de,COP0
+        add hl,de
+        ret
+
+; construir_fila: (cf_l) = linea del mundo. Sus 24 entradas a la vista (columnas cx .. cx+23).
+construir_fila:
+        ld a,(banco_nivel)
+        call pon_banco
+        ld hl,(cf_l)
+        ld a,l
+        and 15
+        add a,a
+        ld (cc_t2),a
+        call div16
+        add hl,hl
+        ld de,ROWT
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)               ; DE = fila del mapa
+        ld hl,(cam_x)
+        call div8
+        ld a,l
+        and 1
+        ld (cc_med),a
+        srl h
+        rr l
+        add hl,de               ; HL = primer tile
+        ld iy,WBF
+        ld b,25
+        ld a,(cc_med)
+        or a
+        jr z,cfl1
+        push hl                 ; empieza por la mitad derecha de un tile
+        ld a,(hl)
+        call ptr_tile
+        inc hl
+        ld a,(hl)
+        ld (iy+0),a
+        inc iy
+        pop hl
+        inc hl
+        dec b
+cfl1:   push hl
+        ld a,(hl)
+        call ptr_tile
+        ld a,(hl)
+        ld (iy+0),a
+        inc iy
+        dec b
+        jr z,cfl2
+        inc hl
+        ld a,(hl)
+        ld (iy+0),a
+        inc iy
+        pop hl
+        inc hl
+        djnz cfl1
+        jr cfl3
+cfl2:   pop hl
+cfl3:   ld a,7
+        call pon_banco
+        ld hl,(cf_l)            ; linea del anillo
+        ld de,(cam_y)
+        or a
+        sbc hl,de
+        ld a,(rlin)
+        add a,l
+        jr c,cfl4
+        cp 160
+        jr c,cfl5
+cfl4:   sub 160
+cfl5:   call dir_anillo
+        ld (cf_ini),hl
+        ld a,(rcol)
+        ld e,a
+        ld d,0
+        add hl,de
+        ld a,(rcol)
+        neg
+        add a,ANCHO
+        ld c,a                  ; entradas hasta el final de la linea del anillo
+        ld ix,WBF
+        ld b,ANCHO
+cfl6:   ld d,(ix+0)
+        ld e,(ix+1)
+        inc ix
+        call esc4
+        inc hl
+        dec c
+        jr nz,cfl7
+        ld hl,(cf_ini)
+cfl7:   djnz cfl6
+        ld a,(banco_nivel)
+        jp pon_banco
+
+; ------------------------------------------------------------
+;  CAMARA: sigue al jugador (IX) cuando se acerca a los bordes (margenes N_UMB y N_UMBR)
+; ------------------------------------------------------------
+desplazar:
+        ld a,(umbral)           ; --- horizontal: lo que se pasa del margen, par y hasta 8
+        ld c,a
+        ld a,(ix+S_X)
+        sub c
+        jr c,dzc_i
+        ld a,(umbral)
+        neg
+        add a,192
+        ld c,a
+        ld a,(ix+S_X)
+        add a,(ix+S_WP)
+        sub c
+        jr c,dzc_x0
+        jr z,dzc_x0
+        inc a
+        and 0xFE
+        cp 9
+        jr c,dzc_x1
+        ld a,8
+        jr dzc_x1
+dzc_i:  and 0xFE
+        cp 0xF8
+        jr nc,dzc_x1
+        ld a,0xF8
+        jr dzc_x1
+dzc_x0: xor a
+dzc_x1: or a
+        jr z,dzc_x9
+        ld hl,(cam_x)           ; nueva posicion, dentro de 0 .. cmx
+        call sumar_lim_x
+        push hl
+        ld de,(cam_x)
+        or a
+        sbc hl,de
+        ld a,l
+        ld (cdx),a
+        ld hl,(cam_x)
+        call div8
+        ex de,hl                ; DE = columna de antes
+        pop hl
+        ld (cam_x),hl
+        call div8
+        or a
+        sbc hl,de
+        ld a,l
+        or a
+        jr z,dzc_y
+        dec a
+        jr nz,dzc_xi
+        ld a,(rcol)             ; una columna a la derecha: entra la cx+23
+        inc a
+        cp ANCHO
+        jr c,dzc_x2
+        xor a
+dzc_x2: ld (rcol),a
+        ld hl,(cam_x)
+        call div8
+        ld de,ANCHO-1
+        add hl,de
+        jr dzc_xc
+dzc_xi: ld a,(rcol)             ; a la izquierda: entra la cx
+        or a
+        jr nz,dzc_x3
+        ld a,ANCHO
+dzc_x3: dec a
+        ld (rcol),a
+        ld hl,(cam_x)
+        call div8
+dzc_xc: ld (cc_w),hl
+        ld hl,(cam_y)
+        ld (cc_l),hl
+        ld a,160
+        ld (cc_n),a
+        push ix
+        call construir_col
+        pop ix
+        jr dzc_y
+dzc_x9: ld (cdx),a
+dzc_y:  ld a,(umbral_r)         ; --- vertical: pixel a pixel, hasta 8
+        ld c,a
+        ld a,(ix+S_Y)
+        sub c
+        jr c,dzc_a
+        ld a,(umbral_r)
+        neg
+        add a,ALTO*8
+        ld c,a
+        ld a,(ix+S_Y)
+        add a,(ix+S_H)
+        sub c
+        jr c,dzc_y0
+        jr z,dzc_y0
+        cp 9
+        jr c,dzc_y1
+        ld a,8
+        jr dzc_y1
+dzc_a:  cp 0xF8
+        jr nc,dzc_y1
+        ld a,0xF8
+        jr dzc_y1
+dzc_y0: xor a
+dzc_y1: ld (cdy),a
+        or a
+        jr z,dzc_fin
+        ld hl,(cam_y)
+        call sumar_lim_y
+        ld de,(cam_y)
+        or a
+        sbc hl,de
+        ld a,l
+        ld (cdy),a
+        or a
+        jr z,dzc_fin
+        bit 7,a
+        jr nz,dzc_sube
+        ld b,a
+dzc_bj: push bc                 ; baja: entra por abajo la linea cam_y + 159
+        ld hl,(cam_y)
+        inc hl
+        ld (cam_y),hl
+        ld a,(rlin)
+        inc a
+        cp 160
+        jr c,dzc_b1
+        xor a
+dzc_b1: ld (rlin),a
+        ld de,159
+        add hl,de
+        ld (cf_l),hl
+        push ix
+        call construir_fila
+        pop ix
+        pop bc
+        djnz dzc_bj
+        jr dzc_fin
+dzc_sube:
+        neg
+        ld b,a
+dzc_sb: push bc                 ; sube: entra por arriba la linea cam_y
+        ld hl,(cam_y)
+        dec hl
+        ld (cam_y),hl
+        ld (cf_l),hl
+        ld a,(rlin)
+        or a
+        jr nz,dzc_s1
+        ld a,160
+dzc_s1: dec a
+        ld (rlin),a
+        push ix
+        call construir_fila
+        pop ix
+        pop bc
+        djnz dzc_sb
+dzc_fin:
+        call cam_partes
+        ld a,(cdx)              ; todo lo que hay en pantalla se mueve al reves que la camara
+        neg
+        ld b,a
+        ld a,(cdy)
+        neg
+        ld c,a
+        or b
+        ret z
+        ld a,(ix+S_X)
+        add a,b
+        ld (ix+S_X),a
+        ld a,(ix+S_Y)
+        add a,c
+        ld (ix+S_Y),a
+        ld a,(seguro_y)
+        add a,c
+        ld (seguro_y),a
+        jp desplazar_objetos
+
+; sumar_lim_x / _y: HL = posicion, A = desplazamiento con signo -> HL dentro de 0 .. cmx (cmy)
+sumar_lim_x:
+        ld de,(cmx)
+        jr sl0
+sumar_lim_y:
+        ld de,(cmy)
+sl0:    ld (sl_max),de
+        ld e,a
+        ld d,0
+        bit 7,a
+        jr z,sl1
+        dec d
+sl1:    add hl,de
+        bit 7,d
+        jr nz,sl_neg
+        ex de,hl
+        ld hl,(sl_max)
+        or a
+        sbc hl,de
+        ex de,hl
+        ret nc
+        ld hl,(sl_max)
+        ret
+sl_neg: ret c                   ; (sin acarreo: ha pasado de 0)
+        ld hl,0
+        ret
+
+; ------------------------------------------------------------
+;  MAPA: tile en un punto de la pantalla (B = x, C = y), con el banco de la fase
+; ------------------------------------------------------------
+flags_en:
+        call dir_mapa
+        ld a,(hl)
+        call id_celda
+        ld l,a
+        ld h,SOLIDOS/256
+        ld a,(hl)
+        ret
+dir_mapa:
+        ld a,(cy_lo)
+        add a,c
+        ld e,a
+        and 15
+        ld (ct_fy),a
+        ld a,(cx_lo)
+        add a,b
+        and 15
+        ld (ct_fx),a
+        ld a,e
+        rrca
+        rrca
+        rrca
+        rrca
+        and 15
+        ld hl,cy_hi
+        add a,(hl)
+        ld l,a
+        ld h,0
+        add hl,hl
+        ld de,ROWT
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ld a,(cx_lo)
+        add a,b
+        rrca
+        rrca
+        rrca
+        rrca
+        and 15
+        ld hl,cx_hi
+        add a,(hl)
+        ld l,a
+        ld h,0
+        add hl,de
+        ret
+
+; cambiar_tile: B = x, C = y. Cambia el tile por su "tras", da sus puntos y reconstruye su trozo
+cambiar_tile:
+        push ix
+        push bc
+        call dir_mapa
+        ld a,(hl)
+        call id_celda
+        ld (ct_id),a
+        push hl
+        xor a
+        call nuevo_tile
+        pop hl
+        call anotar
+        ld (hl),a
+        ld a,4
+        call propiedad
+        call sumar_puntos
+        ld a,2
+        ld (cnt_hud),a
+        pop bc
+        ld a,(cy_lo)            ; fila y columna de tiles del mundo
+        add a,c
+        rrca
+        rrca
+        rrca
+        rrca
+        and 15
+        ld hl,cy_hi
+        add a,(hl)
+        ld (ct_fila),a
+        ld a,(cx_lo)
+        add a,b
+        rrca
+        rrca
+        rrca
+        rrca
+        and 15
+        ld hl,cx_hi
+        add a,(hl)
+        ld (ct_col),a
+        ld a,(ct_fila)          ; lineas: las del tile que estan a la vista
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld de,(cam_y)
+        ld a,16
+        ld (cc_n),a
+        or a
+        sbc hl,de               ; 16 f - cam_y
+        jr nc,ctc1
+        ld a,h
+        inc a
+        jr nz,ctc_fin           ; muy por encima
+        ld a,l
+        add a,16
+        jr nc,ctc_fin           ; (todo por encima)
+        jr z,ctc_fin
+        ld (cc_n),a
+        ld hl,0
+ctc1:   ld a,h
+        or a
+        jr nz,ctc_fin
+        ld a,l
+        cp 160
+        jr nc,ctc_fin           ; por debajo
+        ld a,(cc_n)
+        add a,l
+        sub 160
+        jr c,ctc2
+        jr z,ctc2
+        ld e,a
+        ld a,(cc_n)
+        sub e
+        ld (cc_n),a
+ctc2:   ld de,(cam_y)
+        add hl,de
+        ld (cc_l),hl
+        ld hl,(cam_x)
+        call div8
+        ex de,hl                ; DE = cx
+        ld a,(ct_col)
+        ld l,a
+        ld h,0
+        add hl,hl
+        dec hl                  ; columnas de bytes 2c-1, 2c y 2c+1
+        ld b,3
+ctc3:   push bc
+        push hl
+        push de
+        or a
+        sbc hl,de
+        jr c,ctc4
+        ld a,h
+        or a
+        jr nz,ctc4
+        ld a,l
+        cp ANCHO
+        jr nc,ctc4
+        pop de
+        pop hl
+        push hl
+        push de
+        ld (cc_w),hl
+        call construir_col
+ctc4:   pop de
+        pop hl
+        inc hl
+        pop bc
+        djnz ctc3
+ctc_fin:
+        pop ix
+        ret
+
+; ------------------------------------------------------------
+;  APARICIONES: lista ordenada por x del mundo (x, y en pixeles, tipo, estado). Cada fotograma se
+;  miran las que tienen x cerca de la vista (entre ap_lo y ap_hi): una aparece cuando su sitio
+;  entra entero en la vista (estado bit 0: ya se veia; bit 1: destruida).
+; ------------------------------------------------------------
+ap_reset:
+        ld hl,(N_APAR)
+        ld (ap_lo),hl
+        ld (ap_hi),hl
+apr1:   ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ld a,d
+        and e
+        inc a
+        ret z
+        inc hl
+        inc hl
+        inc hl
+        inc hl
+        ld (hl),0
+        inc hl
+        jr apr1
+
+aparecer:
+        ld hl,(cam_x)
+        ld de,-32
+        add hl,de
+        jr c,apc0
+        ld hl,0
+apc0:   ld (ap_xa),hl
+        ld hl,(cam_x)
+        ld de,192
+        add hl,de
+        ld (ap_xb),hl
+apc1:   ld hl,(ap_lo)           ; lo avanza mientras x < xa
+        call ap_x
+        jr z,apc2
+        ld hl,(ap_xa)
+        ex de,hl
+        or a
+        sbc hl,de
+        jr nc,apc2
+        ld hl,(ap_lo)
+        call ap_novista
+        ld de,6
+        add hl,de
+        ld (ap_lo),hl
+        jr apc1
+apc2:   ld hl,(ap_lo)           ; lo retrocede mientras la anterior tenga x >= xa
+        ld de,(N_APAR)
+        or a
+        sbc hl,de
+        jr z,apc3
+        ld hl,(ap_lo)
+        ld de,-6
+        add hl,de
+        push hl
+        call ap_x
+        ld hl,(ap_xa)
+        ex de,hl
+        or a
+        sbc hl,de
+        pop hl
+        jr c,apc3
+        ld (ap_lo),hl
+        jr apc2
+apc3:   ld hl,(ap_hi)           ; hi avanza mientras x < xb
+        call ap_x
+        jr z,apc4
+        ld hl,(ap_xb)
+        ex de,hl
+        or a
+        sbc hl,de
+        jr nc,apc4
+        ld hl,(ap_hi)
+        ld de,6
+        add hl,de
+        ld (ap_hi),hl
+        jr apc3
+apc4:   ld hl,(ap_hi)           ; hi retrocede mientras la anterior tenga x >= xb
+        ld de,(N_APAR)
+        or a
+        sbc hl,de
+        jr z,apc5
+        ld hl,(ap_hi)
+        ld de,-6
+        add hl,de
+        push hl
+        call ap_x
+        ld hl,(ap_xb)
+        ex de,hl
+        or a
+        sbc hl,de
+        pop hl
+        jr c,apc5
+        ld (ap_hi),hl
+        call ap_novista
+        jr apc4
+apc5:   ld hl,(ap_lo)           ; las de la ventana
+apc6:   ld de,(ap_hi)
+        push hl
+        or a
+        sbc hl,de
+        pop hl
+        ret nc
+        push hl
+        call ap_mirar
+        pop hl
+        ld de,6
+        add hl,de
+        jr apc6
+
+; ap_x: HL = entrada -> DE = su x (Z si es el final de la lista)
+ap_x:   ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ld a,d
+        and e
+        inc a
+        ret
+; ap_novista: HL = entrada (se conserva) -> estado bit 0 a cero
+ap_novista:
+        push hl
+        ld de,5
+        add hl,de
+        res 0,(hl)
+        pop hl
+        ret
+
+; ap_mirar: HL = entrada. Si su sitio esta entero en la vista y antes no lo estaba, aparece
+ap_mirar:
+        ld (ap_ent),hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ld hl,(cam_x)
+        ex de,hl
+        or a
+        sbc hl,de
+        ld a,h
+        or a
+        jr nz,am_no
+        ld a,l
+        ld (ap_px),a
+        ld hl,(ap_ent)
+        inc hl
+        inc hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        inc hl
+        ld a,(hl)
+        ld (ap_tipo),a
+        ld hl,(cam_y)
+        ex de,hl
+        or a
+        sbc hl,de
+        ld a,h
+        or a
+        jr nz,am_no
+        ld a,l
+        ld (ap_py),a
+        ld a,(ap_tipo)          ; su tamano
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld d,h
+        ld e,l
+        add hl,hl
+        add hl,de
+        ld de,tipos
+        add hl,de
+        ld a,(hl)
+        add a,a
+        add a,a
+        add a,a
+        ld b,a
+        inc hl
+        ld c,(hl)
+        ld a,(ap_px)
+        add a,b
+        jr c,am_no
+        cp 193
+        jr nc,am_no
+        ld a,(ap_py)
+        add a,c
+        jr c,am_no
+        cp ALTO*8+1
+        jr nc,am_no
+        ld hl,(ap_ent)
+        ld de,5
+        add hl,de
+        ld a,(hl)
+        and 3
+        ret nz                  ; ya se veia, o esta destruida
+        push hl
+        call ap_crear_c
+        pop hl
+        ret nz                  ; sin hueco: se reintenta
+        set 0,(hl)
+        ret
+am_no:  ld hl,(ap_ent)
+        jp ap_novista
+
+; ap_crear_c: crea el enemigo de (ap_ent) en (ap_px, ap_py). NZ si no hay hueco
+ap_crear_c:
+        ld hl,(ap_ent)
+        ld ix,sprites+SLOT      ; ¿ya esta en juego?
+        ld a,(n_ene)
+        ld b,a
+        ld de,SLOT
+acc0:   ld a,(ix+S_ACT)
+        or a
+        jr z,acc1
+        ld a,(ix+S_AP)
+        cp l
+        jr nz,acc1
+        ld a,(ix+S_AP+1)
+        cp h
+        ret z
+acc1:   add ix,de
+        djnz acc0
+        ld ix,sprites+SLOT
+        ld a,(n_ene)
+        ld b,a
+        call buscar_libre
+        ret nz
+        ld hl,(ap_ent)
+        ld (ix+S_AP),l
+        ld (ix+S_AP+1),h
+        ld a,(ap_tipo)
+        call activar_tipo
+        ld a,(ap_px)
+        ld (ix+S_X),a
+        ld a,(ap_py)
+        ld (ix+S_Y),a
+        xor a
+        ret
+
+; ------------------------------------------------------------
+;  VOLCADO de la copia que toca a la pantalla oculta (en lugar de render_bloques)
+; ------------------------------------------------------------
+render_bloques:
+        ld a,7
+        call pon_banco
+        ld a,(C_COLSPR)         ; con tinta propia de los personajes: el area vuelve a su color
+        or a
+        call nz,atr_oculta
+        ld a,(cam_x)            ; copia = (x / 2) mod 4
+        rrca
+        and 3
+        add a,a
+        ld e,a
+        ld d,0
+        ld hl,tab_copias
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ld a,d
+        add a,14
+        ld (vlim),a             ; (si H pasa de la copia + 14 paginas, vuelve 15 atras)
+        ld a,(rlin)
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        ld b,h
+        ld c,l
+        add hl,hl
+        add hl,bc
+        add hl,de
+        ld a,(rcol)
+        ld c,a
+        ld b,0
+        add hl,bc
+        push hl
+        call vc_codigo
+        pop hl
+        ld a,(pfila)
+        ld c,a
+        ld b,ALTO
+vcf:    push bc
+        ld a,c                  ; DE = fila C de la pantalla oculta
+        and 0x18
+        ld d,a
+        ld a,(base)
+        or d
+        ld d,a
+        ld a,c
+        and 7
+        rrca
+        rrca
+        rrca
+        ld e,a
+        ld a,(pcol)
+        or e
+        ld e,a
+        rept 7
+        call VCOD
+        ld bc,ANCHO
+        add hl,bc
+        ld a,(vlim)
+        cp h
+        jr nc,$+6
+        ld a,h
+        sub 15
+        ld h,a
+        ld a,e
+        sub ANCHO
+        ld e,a
+        inc d
+        endm
+        call VCOD
+        ld bc,ANCHO
+        add hl,bc
+        ld a,(vlim)
+        cp h
+        jr nc,$+6
+        ld a,h
+        sub 15
+        ld h,a
+        pop bc
+        inc c
+        dec b
+        jp nz,vcf
+        ret
+
+; vc_codigo: prepara VCOD: 24-rcol LDI, vuelta al principio de la linea (HL-24), rcol LDI, ret
+vc_codigo:
+        ld hl,VCOD
+        ld a,(rcol)
+        neg
+        add a,ANCHO
+        ld b,a
+        call vcc_ldi
+        ld (hl),0x01            ; ld bc,-24
+        inc hl
+        ld (hl),0xE8
+        inc hl
+        ld (hl),0xFF
+        inc hl
+        ld (hl),0x09            ; add hl,bc
+        inc hl
+        ld a,(rcol)
+        ld b,a
+        call vcc_ldi
+        ld (hl),0xC9            ; ret
+        ret
+vcc_ldi:
+        ld a,b
+        or a
+        ret z
+vcl1:   ld (hl),0xED
+        inc hl
+        ld (hl),0xA0
+        inc hl
+        djnz vcl1
+        ret
+
+tab_copias: dw 0x6000,0x6F00,0xDB00,0xEA00
+VCOD:      ds 54
+vlim:      db 0
+cam_x:     dw 0
+cam_y:     dw 0
+cmx:       dw 0
+cmy:       dw 0
+stride:    dw 16
+map_w:     db 12
+map_sh:    db 4
+rcol:      db 0
+rlin:      db 0
+cx_lo:     db 0
+cx_hi:     db 0
+cy_lo:     db 0
+cy_hi:     db 0
+cdx:       db 0
+cdy:       db 0
+sl_max:    dw 0
+cc_w:      dw 0
+cc_l:      dw 0
+cc_n:      db 0
+cc_tc:     dw 0
+cc_med:    db 0
+cc_t2:     db 0
+cc_seg:    db 0
+cc_rc:     db 0
+cf_l:      dw 0
+cf_ini:    dw 0
+ct_col:    db 0
+ap_lo:     dw 0
+ap_hi:     dw 0
+ap_xa:     dw 0
+ap_xb:     dw 0
+ap_px:     db 0
+ap_py:     db 0
+ap_tipo:   db 0
+;@ FIN
+
+
+; ------------------------------------------------------------
+;  TILES DE 8x8 Y TILES DE PROFUNDIDAD
+;  Tras la cabecera de cada fase hay 8 bytes (EXT): direcciones de META (celda de 8x8 de cada cuarto
+;  de cada tile de 16x16), TRASM (tile que queda al cambiar cada cuarto) y de la tabla de
+;  profundidad; 1 si los tiles son de 8x8, y FLG: bits 0-3 bordes con lineas que no se traspasan,
+;  bit 4 hay tiles de profundidad.
+;  Tabla de profundidad: numero de entradas y, en cada una (35 bytes): celda, linea Tras y linea
+;  Ante, cada linea con un byte de opciones (bit 7 existe, bits 0-1 borde del sprite que se mira:
+;  0 abajo, 1 arriba, 2 izquierda, 3 derecha; bit 2 no se traspasa; bit 3 cuenta el otro lado) y 16 bytes con la altura de la
+;  linea en cada columna (o su columna en cada fila, para los bordes izquierdo y derecho).
+; ------------------------------------------------------------
+
+; id_celda: A = tile del mapa -> A = celda (con tiles de 8x8: META[tile*4 + cuarto]). Usa DE
+id_celda:
+        ld e,a
+        ld a,(EXT_T8)
+        or a
+        ld a,e
+        ret z
+        ld (ct_meta),a
+        push hl                 ; (HL se conserva: suele ser la casilla del mapa)
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        call cuarto
+        or l
+        ld l,a
+        ld de,(EXT_META)
+        add hl,de
+        ld a,(hl)
+        pop hl
+        ret
+; cuarto: A = cuarto del tile del ultimo punto mirado (0 arriba-izq, 1 arriba-dcha, 2, 3)
+cuarto: ld a,(ct_fy)
+        and 8
+        rrca
+        rrca
+        ld e,a
+        ld a,(ct_fx)
+        and 8
+        rrca
+        rrca
+        rrca
+        or e
+        ret
+; nuevo_tile: A = tile que queda al cambiar el punto (su "tras", o con 8x8 el de TRASM)
+nuevo_tile:
+        ld a,(EXT_T8)
+        or a
+        jr nz,ntt8
+        jp propiedad            ; (A = 0: campo "tras")
+ntt8:   ld a,(ct_meta)
+        ld l,a
+        ld h,0
+        add hl,hl
+        add hl,hl
+        call cuarto
+        or l
+        ld l,a
+        ld de,(EXT_TRASM)
+        add hl,de
+        ld a,(hl)
+        ret
+
+; ------------------------------------------------------------
+;  PROFUNDIDAD (logica, con el banco de la fase): que celdas de profundidad tapan a cada sprite
+;  Lista PRFL: tile, x+16 e y+16 de su origen en pantalla y el rectangulo que hay que redibujar
+; ------------------------------------------------------------
+profundidad:
+        xor a
+        ld (prf_n),a
+        ld a,(EXT_FLG)
+        and 0x10
+        ret z
+;@ SOLO B C
+        jp prf_cuerpo           ; (en el modo de bloques, fuera del motor: solo se carga si hace falta)
+;@ FIN
+;@ APARTE B 0x7400 C 0x8000
+prf_cuerpo:
+        ld ix,sprites
+        ld a,(n_spr)
+        ld b,a
+prf1:   push bc
+        ld a,(ix+S_ACT)
+        or a
+        call nz,prf_sprite
+        ld de,SLOT
+        add ix,de
+        pop bc
+        djnz prf1
+        ret
+
+prf_sprite:
+        ld a,(ix+S_X)
+        ld (pr_sx),a
+        ld (ps_x0),a
+        add a,(ix+S_WP)
+        dec a
+        cp 192
+        jr c,psp1
+        ld a,191
+psp1:   ld (ps_x1),a
+        ld a,(ix+S_Y)
+        ld (pr_sy),a
+        ld (ps_y0),a
+        add a,(ix+S_H)
+        dec a
+        cp ALTO*8
+        jr c,psp2
+        ld a,ALTO*8-1
+psp2:   ld (ps_y1),a
+        ld a,(ps_y0)
+        ld (ps_py),a
+psy:    ld a,(ps_x0)
+        ld (ps_px),a
+psx:    ld a,(ps_px)
+        ld b,a
+        ld a,(ps_py)
+        ld c,a
+        call celda_en           ; A = celda, NZ si es de profundidad
+        call nz,prf_celda
+        ld a,(ps_cx16)          ; siguiente columna de celdas
+        ld hl,csz
+        add a,(hl)
+        sub 16
+        jr c,psx2
+        ld hl,ps_x1
+        cp (hl)
+        jr z,psx3
+        jr nc,psx2
+psx3:   ld (ps_px),a
+        jr psx
+psx2:   ld a,(ps_cy16)          ; siguiente fila de celdas
+        ld hl,csz
+        add a,(hl)
+        sub 16
+        ret c
+        ld hl,ps_y1
+        cp (hl)
+        jr z,psy3
+        ret nc
+psy3:   ld (ps_py),a
+        jr psy
+
+; celda_en: B = x, C = y -> A = celda, ps_meta, origen de la celda (ps_cx16, ps_cy16) y del tile
+; (ps_mx16, ps_my16), con 16 sumado. NZ si la celda es de profundidad
+celda_en:
+        call dir_mapa
+        ld a,(hl)
+        ld (ps_meta),a
+        call id_celda
+        ld (ps_id),a
+        ld a,(ct_fx)
+        ld e,a
+        ld a,b
+        add a,16
+        sub e
+        ld (ps_mx16),a
+        ld a,(cmsk)
+        and e
+        ld e,a
+        ld a,b
+        add a,16
+        sub e
+        ld (ps_cx16),a
+        ld a,(ct_fy)
+        ld e,a
+        ld a,c
+        add a,16
+        sub e
+        ld (ps_my16),a
+        ld a,(cmsk)
+        and e
+        ld e,a
+        ld a,c
+        add a,16
+        sub e
+        ld (ps_cy16),a
+        ld a,(ps_id)
+        ld l,a
+        ld h,SOLIDOS/256
+        bit 7,(hl)
+        ret
+
+; prf_busca: A = celda -> HL = su entrada (lineas) en la tabla de profundidad; Z si no esta
+prf_busca:
+        ld hl,(EXT_PROF)
+        ld b,(hl)
+        inc hl
+        inc b
+        dec b
+        ret z
+pb1:    cp (hl)
+        jr z,pb2
+        ld de,35
+        add hl,de
+        djnz pb1
+        xor a
+        ret
+pb2:    inc hl
+        or 1
+        ret
+
+; prf_celda: (ps_id) de profundidad tocada por el sprite IX en (pr_sx, pr_sy): ¿manda el tile?
+prf_celda:
+        ld a,(ps_id)
+        call prf_busca
+        ret z
+        ld (pc_l),hl
+        bit 7,(hl)              ; linea Tras: si el borde esta por debajo, manda el sprite
+        jr z,pce1
+        call pc_lado
+        jr z,pce1
+        ret p
+pce1:   ld hl,(pc_l)            ; linea Ante: si el borde esta por debajo o en ella, manda el tile;
+        ld de,17                ; si no, el sprite
+        add hl,de
+        bit 7,(hl)
+        jr z,pce_tile
+        call pc_lado
+        ret m
+pce_tile:
+        ld a,(prf_n)            ; anade el trozo que hay que redibujar
+        cp PRFMAX
+        ret nc
+        ld l,a
+        ld h,0
+        ld e,l
+        ld d,h
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        or a
+        sbc hl,de               ; *7
+        ld de,PRFL
+        add hl,de
+        ld a,(ps_meta)
+        ld (hl),a
+        inc hl
+        ld a,(ps_mx16)
+        ld (hl),a
+        inc hl
+        ld a,(ps_my16)
+        ld (hl),a
+        inc hl
+        ld bc,(ps_x0)           ; x: de max(celda, sprite) a min(...)
+        ld a,(ps_cx16)
+        call pct_rng
+        ret c                   ; (vacio)
+        ld bc,(ps_y0)
+        ld a,(ps_cy16)
+        call pct_rng
+        ret c
+        ld hl,prf_n
+        inc (hl)
+        ret
+; pct_rng: A = origen de la celda (+16), C, B = principio y fin del sprite -> (HL), (HL+1) = el
+; trozo comun; HL += 2. C si queda vacio
+pct_rng:
+        ld d,a
+        ld a,c
+        add a,16
+        cp d
+        jr nc,pct1
+        ld a,d
+pct1:   sub 16
+        ld (hl),a
+        inc hl
+        ld e,a
+        ld a,(cmsk)
+        add a,d
+        ld d,a
+        ld a,b
+        add a,16
+        cp d
+        jr c,pct2
+        ld a,d
+pct2:   sub 16
+        ld (hl),a
+        inc hl
+        cp e
+        ret
+
+; pc_lado: HL = linea (opciones y 16 valores), IX = sprite en (pr_sx, pr_sy), celda en
+; (ps_cx16, ps_cy16) -> A = distancia con signo del borde del sprite a la linea (positiva: por
+; debajo, o a la derecha en los bordes izquierdo y derecho)
+pc_lado:
+        ld a,(hl)
+        ld (pc_op),a
+        and 3
+        inc hl
+        ld c,a
+        ld a,(ix+S_WP)          ; punto del borde: abajo o arriba, en el centro
+        srl a
+        ld e,a
+        ld a,(ix+S_H)
+        srl a
+        ld d,a                  ; D = mitad del alto, E = mitad del ancho
+        ld a,c
+        cp 2
+        jr nc,pcl_lat
+        ld a,(pr_sx)
+        add a,e
+        ld e,a
+        ld a,c
+        or a
+        ld a,(pr_sy)
+        jr nz,pcl1
+        add a,(ix+S_H)
+        dec a
+pcl1:   ld d,a                  ; E = x, D = y del punto
+        ld a,(ps_cx16)          ; t = x - celda (recortado)
+        ld b,a
+        ld a,e
+        add a,16
+        sub b
+        call pcl_t
+        ld a,(ps_cy16)
+        ld b,a
+        ld a,d
+        add a,16
+        sub b                   ; distancia = y - celda - valor
+        sub (hl)
+        jr pcl_fin
+pcl_lat:
+        ld a,(pr_sy)            ; izquierdo o derecho, a media altura
+        add a,d
+        ld d,a
+        ld a,c
+        cp 2
+        ld a,(pr_sx)
+        jr z,pcl2
+        add a,(ix+S_WP)
+        dec a
+pcl2:   ld e,a
+        ld a,(ps_cy16)
+        ld b,a
+        ld a,d
+        add a,16
+        sub b
+        call pcl_t
+        ld a,(ps_cx16)
+        ld b,a
+        ld a,e
+        add a,16
+        sub b
+        sub (hl)
+pcl_fin:                        ; con el bit 3, el lado se invierte (encima o a la izquierda)
+        ld c,a
+        ld a,(pc_op)
+        and 8
+        ld a,c
+        jr z,pclf1
+        neg
+        ret
+pclf1:  or a
+        ret
+; pcl_t: A = posicion en la celda (con signo) -> HL apuntando a su valor (recortada a la celda)
+pcl_t:  bit 7,a
+        jr z,pclt1
+        xor a
+pclt1:    push bc
+        ld b,a
+        ld a,(cmsk)
+        cp b
+        jr c,pclt2
+        ld a,b
+pclt2:    pop bc
+        add a,l
+        ld l,a
+        ret nc
+        inc h
+        ret
+;@ FINAPARTE
+
+; ------------------------------------------------------------
+;  LINEAS QUE NO SE TRASPASAN: IX = sprite, D = x nueva, E = y nueva -> NZ si cruzaria alguna
+;  (se mira la celda del borde antes y despues del paso). Conserva DE
+; ------------------------------------------------------------
+linea_bloquea:
+        ld a,(EXT_FLG)
+        and 15
+        ret z
+;@ SOLO B C
+        jp lb_cuerpo
+;@ FIN
+;@ APARTE B 0x7400 C 0x8000
+lb_cuerpo:
+        push de
+        ld (lb_eds),a
+        ld a,d
+        ld (lb_nx),a
+        ld a,e
+        ld (lb_ny),a
+        xor a
+lb1:    ld (lb_e),a
+        ld hl,lb_eds
+        srl (hl)
+        jr nc,lb_sig
+        call lb_borde
+        jr nz,lb_fin
+lb_sig: ld a,(lb_eds)
+        or a
+        jr z,lb_fin
+        ld a,(lb_e)
+        inc a
+        jr lb1
+lb_fin: pop de
+        ret
+; lb_borde: borde (lb_e): mira la celda del punto del borde en la posicion nueva y en la vieja
+lb_borde:
+        ld a,(lb_nx)
+        ld (pr_sx),a
+        ld a,(lb_ny)
+        ld (pr_sy),a
+        call lb_punto
+        call lb_celda
+        ret nz
+        ld a,(ix+S_X)
+        ld (pr_sx),a
+        ld a,(ix+S_Y)
+        ld (pr_sy),a
+        call lb_punto
+lb_celda:                       ; B, C = punto: si su celda tiene una linea de este borde que no se
+        call celda_en           ; traspasa y el paso la cruza -> NZ
+        ret z
+        ld a,(ps_id)
+        call prf_busca
+        ret z
+        call lb_linea
+        ret nz
+        ld de,17
+        add hl,de
+lb_linea:                       ; HL = linea
+        ld a,(hl)
+        bit 7,a
+        ret z
+        bit 2,a
+        ret z
+        and 3
+        ld b,a
+        ld a,(lb_e)
+        cp b
+        jr z,lbl0
+        xor a
+        ret
+lbl0:   push hl
+        ld a,(lb_nx)            ; lado en la posicion nueva
+        ld (pr_sx),a
+        ld a,(lb_ny)
+        ld (pr_sy),a
+        call pc_lado
+        pop hl
+        push hl
+        ld c,0
+        or a
+        jp m,lbl1
+        jr z,lbl1
+        inc c
+lbl1:   push bc
+        ld a,(ix+S_X)           ; y en la vieja
+        ld (pr_sx),a
+        ld a,(ix+S_Y)
+        ld (pr_sy),a
+        call pc_lado
+        pop bc
+        pop hl
+        ld b,0
+        or a
+        jp m,lbl2
+        jr z,lbl2
+        inc b
+lbl2:   ld a,b
+        xor c
+        ret
+; lb_punto: (pr_sx, pr_sy) y borde (lb_e) -> B, C = punto del borde del sprite IX
+lb_punto:
+        ld a,(lb_e)
+        cp 2
+        jr nc,lbp_lat
+        ld b,a
+        ld a,(ix+S_WP)
+        srl a
+        ld hl,pr_sx
+        add a,(hl)
+        ld e,a
+        ld a,(pr_sy)
+        dec b
+        jr z,lbp1
+        add a,(ix+S_H)
+        dec a
+lbp1:   ld c,a
+        ld b,e
+        ret
+lbp_lat:
+        ld b,a
+        ld a,(ix+S_H)
+        srl a
+        ld hl,pr_sy
+        add a,(hl)
+        ld c,a
+        ld a,(pr_sx)
+        bit 0,b
+        jr z,lbp2
+        add a,(ix+S_WP)
+        dec a
+lbp2:   ld b,a
+        ret
+
+; ------------------------------------------------------------
+;  PROFUNDIDAD (dibujo): despues de los sprites, los trozos de la lista se vuelven a dibujar con
+;  el tile, al pixel (en el anillo o en la pantalla oculta)
+; ------------------------------------------------------------
+;@ FINAPARTE
+restaurar_prof:
+        ld a,(prf_n)
+        or a
+        ret z
+;@ SOLO B C
+        jp rp_cuerpo
+;@ FIN
+;@ APARTE B 0x7400 C 0x8000
+rp_cuerpo:
+        ld b,a
+        ld ix,PRFL
+rpf1:   push bc
+        call rp_uno
+        ld de,7
+        add ix,de
+        pop bc
+        djnz rpf1
+        ret
+rp_uno:
+        ld a,(banco_nivel)      ; el dibujo del tile, a memoria comun
+        call pon_banco
+        ld l,(ix+0)
+        ld h,0
+        add hl,hl
+        add hl,hl
+        ld d,h
+        ld e,l
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,de
+        ld de,(tiles)
+        add hl,de
+        ld de,PRFG
+        ld bc,36
+        ldir
+        ld a,(bloques)          ; scroll fino o libre: se dibuja en la pantalla oculta
+        or a
+        jr z,rpu1
+        ld a,(base)
+        cp 0xC0
+        ld a,7
+        call z,pon_banco
+rpu1:   ld a,(ix+1)
+        and 7
+        ld (rp_s),a
+        ld a,(ix+5)
+        ld (rp_y),a
+rpy:    ld a,(rp_y)             ; fila del tile
+        add a,16
+        sub (ix+2)
+        add a,a
+        ld e,a
+        ld d,0
+        ld hl,PRFG
+        add hl,de
+        ld b,(hl)
+        inc hl
+        ld d,(hl)
+        ld e,0                  ; B D E = fila << 8, desplazada s a la derecha
+        ld a,(rp_s)
+        or a
+        jr z,rpy2
+rpy1:   srl b
+        rr d
+        rr e
+        dec a
+        jr nz,rpy1
+rpy2:   push bc
+        push de
+        ld a,(rp_y)
+        call dir_linea          ; HL = linea, columna 0
+        pop de
+        pop bc
+        ld a,(ix+3)             ; columnas de rx0/8 a rx1/8
+        rrca
+        rrca
+        rrca
+        and 31
+        ld c,a
+rpc:    push hl
+        ld a,c                  ; byte del tile para esta columna: k = c + 2 - (x+16)/8
+        add a,2
+        push bc
+        ld b,a
+        ld a,(ix+1)
+        rrca
+        rrca
+        rrca
+        and 31
+        neg
+        add a,b
+        pop bc
+        push af
+        ld a,c
+        add a,l
+        ld l,a
+        jr nc,rpc0
+        inc h
+rpc0:   pop af
+        push de
+        or a
+        jr z,rpk0
+        dec a
+        jr z,rpk1
+        ld a,e
+        jr rpk
+rpk0:   ld a,b
+        jr rpk
+rpk1:   ld a,d
+rpk:    ld (rp_t),a
+        ld a,c                  ; mascara: los pixeles de rx0..rx1 en este byte
+        add a,a
+        add a,a
+        add a,a
+        ld e,a                  ; E = 8c
+        ld a,(ix+3)
+        sub e
+        jr nc,rpm1
+        xor a
+rpm1:   push hl
+        ld hl,tabla_md
+        add a,l
+        ld l,a
+        jr nc,rpm1b
+        inc h
+rpm1b:  ld d,(hl)
+        ld a,(ix+4)
+        sub e
+        cp 8
+        jr c,rpm2
+        ld a,7
+rpm2:   ld hl,tabla_mi
+        add a,l
+        ld l,a
+        jr nc,rpm2b
+        inc h
+rpm2b:  ld a,(hl)
+        and d
+        pop hl
+        ld d,a                  ; D = mascara
+        ld a,(rp_t)
+        xor (hl)
+        and d
+        xor (hl)
+        ld (hl),a
+        pop de
+        pop hl
+        ld a,(ix+4)
+        rrca
+        rrca
+        rrca
+        and 31
+        cp c
+        jr z,rpc9
+        inc c
+        jr rpc
+rpc9:   ld hl,rp_y
+        ld a,(ix+6)
+        cp (hl)
+        ret z
+        inc (hl)
+        jp rpy
+
+; atr_prof: con la tinta propia de los personajes, las casillas de los trozos redibujados
+; recuperan el color (el del area en el scroll libre; el del cuarto del tile en el fino)
+;@ FINAPARTE
+;@ SOLO B C
+atr_prof:                       ; (solo con personajes de color propio)
+        ld a,(C_COLSPR)
+        or a
+        ret z
+        ld a,(prf_n)
+        or a
+        ret z
+;@ SOLO B
+        jp ap_cuerpo
+;@ FIN
+;@ APARTE B 0x7400
+ap_cuerpo:
+        ld b,a
+        ld ix,PRFL
+apf1:   push bc
+        call ap_uno
+        ld de,7
+        add ix,de
+        pop bc
+        djnz apf1
+        ret
+ap_uno:
+;@ SOLO B
+        ld a,(banco_nivel)      ; los 4 colores del tile, a PRFG+32
+        call pon_banco
+        ld l,(ix+0)
+        ld h,0
+        add hl,hl
+        add hl,hl
+        ld d,h
+        ld e,l
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,de
+        ld de,(tiles)
+        add hl,de
+        ld de,32
+        add hl,de
+        ld de,PRFG+32
+        ld bc,4
+        ldir
+;@ FIN
+        ld a,(base)
+        cp 0xC0
+        ld a,7
+        call z,pon_banco
+        ld a,(ix+4)             ; ultima columna: una casilla mas (el color del sprite la cubre
+        add a,7                 ; aunque no tenga pixeles), sin salir del tile ni del area
+        jr nc,apn1
+        ld a,255
+apn1:   ld e,a
+        ld a,(ix+1)
+        dec a
+        cp e
+        jr nc,apn2
+        ld e,a
+apn2:   ld a,e
+        cp 192
+        jr c,apn3
+        ld a,191
+apn3:   rrca
+        rrca
+        rrca
+        and 31
+        ld (rp_t),a
+        ld a,(ix+5)
+        rrca
+        rrca
+        rrca
+        and 31
+        ld c,a                  ; C = fila de casillas
+apu1:   push bc
+        ld a,(pfila)
+        add a,c
+        call dir_atr            ; DE = atributo de la fila, columna 0 del area
+        ex de,hl
+        ld a,(ix+3)
+        rrca
+        rrca
+        rrca
+        and 31
+        ld b,a
+apu2:   push hl
+        ld a,b
+        add a,l
+        ld l,a
+        call ap_color
+        ld (hl),a
+        pop hl
+        ld a,(rp_t)
+        cp b
+        jr z,apu3
+        inc b
+        jr apu2
+apu3:   pop bc
+        ld a,(ix+6)
+        rrca
+        rrca
+        rrca
+        and 31
+        cp c
+        ret z
+        inc c
+        jr apu1
+; ap_color: B = columna, C = fila de la casilla -> A = su color
+ap_color:
+;@ SOLO C
+        ld a,(C_ATRC)
+        ret
+;@ FIN
+;@ SOLO V H B D
+        push hl
+        ld a,c                  ; cuarto de abajo si la casilla empieza 8 o mas px bajo el tile
+        add a,a
+        add a,a
+        add a,a
+        add a,16
+        sub (ix+2)
+        and 8
+        rrca
+        rrca
+        ld l,a
+        ld a,b
+        add a,a
+        add a,a
+        add a,a
+        add a,16
+        sub (ix+1)
+        and 8
+        rrca
+        rrca
+        rrca
+        or l
+        ld l,a
+        ld h,0
+        ld de,PRFG+32
+        add hl,de
+        ld a,(hl)
+        pop hl
+        ret
+;@ FIN
+;@ FINAPARTE
+;@ FIN
+
 
 tabla_dir:      ; bits: arriba abajo izq dcha
         db 0xFF,2,6,0xFF, 4,3,5,0xFF, 0,1,7,0xFF, 0xFF,0xFF,0xFF,0xFF
@@ -1234,7 +3638,7 @@ scroll_dcha:
         ld a,(paso_h)
         cp 8
         jp c,scroll_dcha_f
-;@ SOLO H
+;@ SOLO H D
         ld hl,(izq)
         ld de,ANCHO
         add hl,de               ; columna del mundo que entra por la derecha
@@ -1270,7 +3674,7 @@ scroll_izq:
         ld a,(paso_h)
         cp 8
         jp c,scroll_izq_f
-;@ SOLO H
+;@ SOLO H D
         ld hl,(izq)
         ld a,h
         or l
@@ -1386,7 +3790,7 @@ pc_lin: ld a,(hl)
         ret
 
 ;@ FIN
-;@ SOLO H B
+;@ SOLO H B D C
 ; ------------------------------------------------------------
 ;  MODO PLATAFORMAS: gravedad, salto, plataformas y caidas
 ;  estado_v: 0 en el suelo, 1 subiendo, 2 cayendo
@@ -1463,6 +3867,9 @@ mp_suelo:
         ld (seguro_x),a
         ld a,(ix+S_Y)
         ld (seguro_y),a
+;@ SOLO D
+        call sala_segura
+;@ FIN
 mp_s_no:
         pop bc
         bit 3,c                 ; arriba = saltar
@@ -1571,15 +3978,22 @@ hay_suelo:
         jr nz,hs_si
         ld a,b
         and 4
-        jr z,hs_no
-        ld a,c                  ; plataforma: solo cuenta su borde superior
-        and 15
-        jr nz,hs_no
-hs_si:  pop bc
-        or 1
-        ret
+        jr z,hs_ln
+        ld a,(cmsk)             ; plataforma: solo cuenta su borde superior (y del mundo)
+        ld hl,ct_fy
+        and (hl)
+        jr z,hs_si
+hs_ln:  ld d,(ix+S_X)           ; ¿una linea de profundidad que no se traspasa?
+        ld a,(ix+S_Y)
+        inc a
+        ld e,a
+        call linea_bloquea
+        jr nz,hs_si
 hs_no:  pop bc
         xor a
+        ret
+hs_si:  pop bc
+        or 1
         ret
 
 ; suelo_punto: B = x, C = y. NZ si en ese punto hay suelo solido o el borde superior de una plataforma
@@ -1591,8 +4005,9 @@ suelo_punto:
         ld a,d
         and 4
         ret z
-        ld a,c
-        and 15
+        ld a,(cmsk)
+        ld hl,ct_fy
+        and (hl)
         jr nz,sp_no
         or 1
         ret
@@ -1618,7 +4033,7 @@ ff1:    call flags_en
         cp b
         jr z,ff_fin2
         ld a,b
-        add a,15
+ffs1:   add a,15
         ld b,a
         ld a,(ff_fin)
         cp b
@@ -1639,6 +4054,12 @@ ba1:    call hay_suelo
         add a,(ix+S_H)
         cp ALTO*8
         jr nc,ba_vacio
+        ld d,(ix+S_X)           ; (una linea que no se traspasa sostiene)
+        ld a,(ix+S_Y)
+        inc a
+        ld e,a
+        call linea_bloquea
+        jr nz,ba_ln
         inc (ix+S_Y)
         ld hl,n_pasos
         dec (hl)
@@ -1667,7 +4088,14 @@ ba_suelo:
 bs1:    pop bc
         scf
         ret
+ba_ln:  pop bc
+        scf
+        ret
 ba_vacio:
+;@ SOLO D
+        call sala_abajo
+        jr nz,ba1
+;@ FIN
         pop bc
         call caer_vacio
         or a
@@ -1679,11 +4107,20 @@ subir:
         ld (n_pasos),a
 su1:    ld a,(ix+S_Y)
         or a
+;@ SOLO D
+        call z,sala_arriba
+;@ FIN
         jr z,su_techo
         dec a
         ld c,a
         call fila_flags
         and 1
+        jr nz,su_techo
+        ld d,(ix+S_X)
+        ld a,(ix+S_Y)
+        dec a
+        ld e,a
+        call linea_bloquea
         jr nz,su_techo
         dec (ix+S_Y)
         ld hl,n_pasos
@@ -1740,6 +4177,9 @@ cv0:    call morir
         ld (ix+S_Y),a
         xor a
         ld (estado_v),a
+;@ SOLO D
+        jp volver_sala          ; (el punto seguro puede estar en otra sala)
+;@ FIN
         ret
 cv_fin: ld a,(muerte)            ; con animacion, la partida acaba cuando termina
         or a
@@ -1783,76 +4223,18 @@ cps_vuelta:
 ; ------------------------------------------------------------
 ;  COLISIONES CON EL MAPA (banco 0 paginado)
 ; ------------------------------------------------------------
-; flags_en: B = x, C = y (pixeles del area) -> A = propiedades del tile
-; conserva BC
+;@ SOLO V H B D
+; flags_en: B = x, C = y (pixeles del area) -> A = propiedades de su celda (conserva BC)
 flags_en:
-        ld a,(dir)
-        or a
-        jr nz,fe_h
-        ld hl,(tpx)             ; vertical: fila = (tpx + y) / 16
-        ld e,c
-        ld d,0
-        add hl,de
-        srl h
-        rr l
-        srl h
-        rr l
-        srl h
-        rr l
-        srl h
-        rr l
-        ld d,h                  ; *12
-        ld e,l
-        add hl,hl
-        add hl,de
-        add hl,hl
-        add hl,hl
-        ld a,b                  ; + x/16
-        rrca
-        rrca
-        rrca
-        rrca
-        and 15
-        jr fe_fin
-fe_h:   ld hl,(izq)             ; horizontal: columna = (izq*8 + fino + x) / 16
-        add hl,hl
-        add hl,hl
-        add hl,hl
-        ld a,(fino)
-        add a,b
-        ld e,a
-        ld d,0
-        add hl,de
-        srl h
-        rr l
-        srl h
-        rr l
-        srl h
-        rr l
-        srl h
-        rr l
-        add hl,hl               ; *10
-        ld d,h
-        ld e,l
-        add hl,hl
-        add hl,hl
-        add hl,de
-        ld a,c                  ; + y/16
-        rrca
-        rrca
-        rrca
-        rrca
-        and 15
-fe_fin: ld e,a
-        ld d,0
-        add hl,de
-        ld de,(mapa)
-        add hl,de
-        ld l,(hl)
+        call dir_mapa
+        ld a,(hl)
+        call id_celda
+        ld l,a
         ld h,SOLIDOS/256
         ld a,(hl)
         ret
 
+;@ FIN
 ; caja_de: IX = sprite, D = x, E = y -> caja reducida 2 px por cada lado
 caja_de:
         ld a,d
@@ -1890,7 +4272,7 @@ cb_x:   ld a,(px)
         ld a,(px)
         cp (hl)
         jr z,cb_xf
-        add a,15
+cbs1:   add a,15
         cp (hl)
         jr c,cb_x2
         ld a,(hl)
@@ -1900,7 +4282,7 @@ cb_xf:  ld hl,cy1
         ld a,(py)
         cp (hl)
         ret z                   ; Z: libre
-        add a,15
+cbs2:   add a,15
         cp (hl)
         jr c,cb_y2
         ld a,(hl)
@@ -1913,7 +4295,7 @@ bloqueado_en:
         call caja_de
         jp caja_bloqueada
 
-;@ SOLO H B
+;@ SOLO H B D C
 ; inercia: C = teclas. Acelera hacia la tecla pulsada hasta la velocidad del jugador
 ; (en 1/16 px: velocidad*16) y, sin tecla, frena hasta pararse. Mueve la parte entera.
 inercia:
@@ -2022,6 +4404,8 @@ mxb_c:  ld a,1
         call caja_bloqueada
         pop de
         ret nz
+        call linea_bloquea
+        ret nz
         ld (ix+S_X),d
         xor a
         ret
@@ -2058,6 +4442,8 @@ myb_c:  ld a,1
         ld (cmask),a
         call caja_bloqueada
         pop de
+        ret nz
+        call linea_bloquea
         ret nz
         ld (ix+S_Y),e
         xor a
@@ -2234,6 +4620,8 @@ ra_h1:  ld h,0
         ld (hl),d
         ret
 
+;@ FIN
+;@ SOLO B C
 ; pintar_atrs: cada personaje con color propio tine sus casillas de caracter en la pantalla oculta
 pintar_atrs:
         ld a,(C_COLSPR)
@@ -2313,6 +4701,8 @@ pa_s:   inc l
         djnz pa_f
         ret
 
+;@ FIN
+;@ SOLO B C
 ; ltab_pantalla: B = byte alto de la pantalla, HL = destino. 160 direcciones de linea del area
 ltab_pantalla:
         ld a,(pfila)
@@ -2348,6 +4738,8 @@ lp1:    ld a,c                  ; direccion = base | linea | columna
         dec e
         jr nz,lp1
         ret
+;@ FIN
+;@ SOLO B
 
 ; cargar_col_par: HL = columna del mundo (caracteres), (vc_pos) = columna de VENT (0-23).
 ; Copia sus 10 parejas desde el mapa de parejas de la fase (banco de la fase paginado).
@@ -3062,6 +5454,7 @@ R_ROMP  equ 16                  ; propiedades: rompible (golpes, disparos, cabez
 R_FRAG  equ 32                  ; fragil: se rompe al caer sobre el (plataformas)
 R_OBJ   equ 64                  ; objeto: se recoge al tocarlo
 
+;@ SOLO V H B D
 ; dir_mapa: B = x, C = y (pixeles del area) -> HL = direccion del tile en el mapa (banco de la fase)
 dir_mapa:
         ld a,(dir)
@@ -3071,6 +5464,12 @@ dir_mapa:
         ld e,c
         ld d,0
         add hl,de
+        ld a,l
+        and 15
+        ld (ct_fy),a
+        ld a,b
+        and 15
+        ld (ct_fx),a
         call div16
         ld d,h                  ; fila * 12 + x/16
         ld e,l
@@ -3089,6 +5488,12 @@ dm_h:   ld hl,(izq)             ; columna * 10 + y/16
         ld e,a
         ld d,0
         add hl,de
+        ld a,l
+        and 15
+        ld (ct_fx),a
+        ld a,c
+        and 15
+        ld (ct_fy),a
         call div16
         add hl,hl
         ld d,h
@@ -3108,6 +5513,7 @@ dm_fin: rrca
         ld de,(mapa)
         add hl,de
         ret
+;@ FIN
 div16:  srl h
         rr l
         srl h
@@ -3140,6 +5546,7 @@ propiedad:
         pop hl
         ret
 
+;@ SOLO V H B D
 ; cambiar_tile: B = x, C = y del punto. Sustituye el tile por su tile "tras", da sus puntos
 ; y lo redibuja en el modo que corresponda.
 cambiar_tile:
@@ -3147,10 +5554,11 @@ cambiar_tile:
         push bc
         call dir_mapa
         ld a,(hl)
+        call id_celda
         ld (ct_id),a
         push hl
         xor a
-        call propiedad
+        call nuevo_tile
         pop hl
         call anotar             ; (para restaurarlo en la proxima partida)
         ld (hl),a               ; nuevo tile en el mapa
@@ -3264,6 +5672,7 @@ ctl_fin:
         pop ix
         ret
 
+;@ FIN
 ;@ SOLO B
 ; hc: HL = columna de caracteres (recortada al mapa), (ct_fila) -> A = media columna (tile*2 + mitad)
 hc:     push hl
@@ -3482,6 +5891,13 @@ danar_enemigo:
         ld a,3
         call sonido
         ld (ix+S_ACT),0
+;@ SOLO C
+        ld l,(ix+S_AP)          ; su aparicion queda destruida (estado, bit 1)
+        ld h,(ix+S_AP+1)
+        ld de,5
+        add hl,de
+        set 1,(hl)
+;@ FIN
         ld l,(ix+S_TIPO)
         ld h,(ix+S_TIPO+1)
         push hl
@@ -3605,6 +6021,7 @@ recoger:
         push bc
         call dir_mapa
         ld a,(hl)
+        call id_celda
         ld (ct_id),a
         ld a,1
         call propiedad
@@ -3947,6 +6364,7 @@ dp1d:   ld ix,(p_bj)
 ;  progreso (palabra, 0xFFFF = fin), coordenada del mundo en caracteres
 ;  en el eje del scroll (palabra), coordenada transversal en px, tipo
 ; ------------------------------------------------------------
+;@ SOLO V H B D
 aparecer:
         ld a,(dir)
         or a
@@ -4145,6 +6563,7 @@ ap_no:  ld (ix+S_ACT),0         ; ya no cabe en pantalla: se descarta
         xor a
         ret
 
+;@ FIN
 ; activar_tipo: A = tipo, IX = hueco
 activar_tipo:
         push af
@@ -5161,9 +7580,16 @@ dsm3:   ld (ds_src),hl
         call pon_banco
         pop bc
         ld hl,(ds_src)
+;@ SOLO V H B D
         ld de,SCRATCH
         ldir
         ld hl,SCRATCH
+;@ FIN
+;@ SOLO C
+        ld de,SCRC
+        ldir
+        ld hl,SCRC
+;@ FIN
         ld (ds_src),hl
         ld a,(base)
         cp 0xC0
@@ -5173,7 +7599,10 @@ dsm3:   ld (ds_src),hl
 ;@ SOLO B
 dsm4:   call sprite_ensucia     ; (en el modo bloques el fondo no se guarda: se redibuja)
 ;@ FIN
-;@ SOLO V H
+;@ SOLO C
+dsm4:                           ; (scroll libre: el fondo se vuelca entero en cada fotograma)
+;@ FIN
+;@ SOLO V H D
 dsm4:   ld l,(ix+S_SV)
         ld h,(ix+S_SV+1)
         push hl
@@ -5199,7 +7628,7 @@ dsl1:   push de
         pop hl
 dw_smc: ld b,3
 dsb:
-;@ SOLO V H
+;@ SOLO V H D
         ld a,(hl)               ; guarda el fondo
         ld (iy+0),a
         inc iy
@@ -5421,7 +7850,7 @@ volcar_h:
         ld a,(paso_h)
         cp 8
         jp c,render_bloques
-;@ SOLO H
+;@ SOLO H D
         ld a,(c0)
         ld e,a
         ld d,0
@@ -5882,7 +8311,7 @@ dibujar_laser:
         ld a,(las_vis)
         or a
         ret z
-;@ SOLO B
+;@ SOLO B C
         ld a,(base)
         cp 0xC0
         ld a,7
@@ -6047,10 +8476,10 @@ lh2:    ld a,b
         ld d,a
 lh3:    ld a,(ll_pat)
         and d
-;@ SOLO B
+;@ SOLO B C
         or (hl)
 ;@ FIN
-;@ SOLO V H
+;@ SOLO V H D
         xor (hl)
 ;@ FIN
         ld (hl),a
@@ -6065,7 +8494,7 @@ lh3:    ld a,(ll_pat)
         ld a,(ll_y)
         jp ens_tramo
 ;@ FIN
-;@ SOLO V H
+;@ SOLO V H D C
         ret
 ;@ FIN
 
@@ -6107,10 +8536,10 @@ lg1:    push bc
         add hl,de
         ld a,(hl)
         pop hl
-;@ SOLO B
+;@ SOLO B C
         or (hl)
 ;@ FIN
-;@ SOLO V H
+;@ SOLO V H D
         xor (hl)
 ;@ FIN
         ld (hl),a
@@ -6986,6 +9415,7 @@ ar_copia:
         ret
 
 ; fin_nivel: el jugador llega al final del mapa -> evento 2
+;@ SOLO V H B
 fin_nivel:
         ld ix,sprites
         ld a,(dir)
@@ -7021,6 +9451,7 @@ fn_si:  ld a,(evento)
         ld (evento),a
         ret
 
+;@ FIN
 ; eventos al final de un fotograma: 1 = sin vidas, 2 = fase superada
 evento_juego:
         cp 3
@@ -7063,6 +9494,7 @@ ev_seguir:                      ; mensaje y la partida sigue: se redibuja todo
         ld a,2
         ld (cnt_atr),a
         ld (cnt_hud),a
+;@ SOLO B
         ld a,(bloques)
         or a
         jp z,bucle
@@ -7071,6 +9503,7 @@ ev_seguir:                      ; mensaje y la partida sigue: se redibuja todo
         ld bc,0x023F
         ld (hl),1
         ldir
+;@ FIN
         jp bucle
 ev_viejo:
         cp 1
@@ -7237,7 +9670,16 @@ ms_fila equ RAMB+144
 ms_sep equ RAMB+145           
 vx      equ RAMB+146          ; inercia: velocidad en 1/16 px (con signo)
 vfrac   equ RAMB+147          ; y fraccion acumulada
-RAMB_LEN equ 148
+ct_fx   equ RAMB+148          ; x e y del mundo (mod 16) del ultimo punto mirado en el mapa
+ct_fy   equ RAMB+149
+ct_meta equ RAMB+150          ; (tiles de 8x8) tile del mapa del ultimo punto
+csz     equ RAMB+151          ; tamano de celda: 16 u 8
+cmsk    equ RAMB+152          ; y su mascara: 15 o 7
+lb_eds  equ RAMB+153
+lb_nx   equ RAMB+154
+lb_ny   equ RAMB+155
+lb_e    equ RAMB+156
+RAMB_LEN equ 157
 n_ene:     db 6
 n_bj:      db 3
 n_be:      db 4

@@ -1,8 +1,10 @@
 """Montaje del juego: proyecto (diccionario) -> archivo .tap para Spectrum 128K."""
 import unicodedata
-import tap, graficos, ejemplo, sonido
+import tap, graficos, ejemplo, sonido, fuente_es
 from pantalla import dir_pixel
 from motor_bin import CARGADOR, MOTORES, DIR_MOTOR, PT3PLAYER, SPRITE_NL
+try: from motor_bin import APARTES
+except ImportError: APARTES = {}
 
 DIR_CARGADOR = 0x5E00
 CLEAR = DIR_CARGADOR - 1
@@ -129,13 +131,13 @@ def limites_a_la_vez(p):
     pedido = {k: max(1, min(MAX_A_LA_VEZ[k], int(v))) for k, v in pedido.items()}
     maximo = dict(MAX_A_LA_VEZ)
     motivo = 'la tabla de huecos del motor'
-    if not modo_bloques(p):
+    if not modo_bloques(p) and not libre(p):
         svj, sve, svb, svbe = tamanos_a_la_vez(p)
-        libre = SAVE_TOTAL - svj
-        maximo['balas_j'] = max(1, min(MAX_A_LA_VEZ['balas_j'], (libre - sve - svbe * pedido['balas_e']) // svb))
-        maximo['balas_e'] = max(1, min(MAX_A_LA_VEZ['balas_e'], (libre - sve - svb * pedido['balas_j']) // svbe))
+        libre_ = SAVE_TOTAL - svj
+        maximo['balas_j'] = max(1, min(MAX_A_LA_VEZ['balas_j'], (libre_ - sve - svbe * pedido['balas_e']) // svb))
+        maximo['balas_e'] = max(1, min(MAX_A_LA_VEZ['balas_e'], (libre_ - sve - svb * pedido['balas_j']) // svbe))
         bj, be = min(pedido['balas_j'], maximo['balas_j']), min(pedido['balas_e'], maximo['balas_e'])
-        maximo['enemigos'] = max(1, min(MAX_A_LA_VEZ['enemigos'], (libre - bj * svb - be * svbe) // sve))
+        maximo['enemigos'] = max(1, min(MAX_A_LA_VEZ['enemigos'], (libre_ - bj * svb - be * svbe) // sve))
         motivo = (f'la zona de 1024 bytes donde cada sprite guarda el fondo que tapa (jugador {svj}, '
                   f'enemigo más grande {sve}, balas {svb} y {svbe} bytes)')
     usar = {k: min(pedido[k], maximo[k]) for k in pedido}
@@ -148,7 +150,7 @@ def coste_sprites(p):
     def coste(tam, compilado):
         w, h = graficos.TAMANOS[tam]
         b = (w // 8 + 1) * h
-        por_byte = 16 if compilado else (45 if modo_bloques(p) else 66)
+        por_byte = 16 if compilado else (45 if modo_bloques(p) or libre(p) else 66)
         return 400 + b * por_byte
     ene = [coste(en['tamano'], n in comp) for n, en in enumerate(p['enemigos'])] or [coste('16x16', False)]
     total = coste(p['jugador']['tamano'], 'j' in comp) + 600
@@ -160,11 +162,12 @@ def coste_sprites(p):
 def estimacion_fps(p, fondo=None):
     """(fotogramas por segundo estimados con todo en pantalla, ciclos usados, ciclos disponibles).
     «fondo» permite pasar ya calculado el coste del fondo (es lo más lento de calcular)."""
+    p = expandir_t8(p)
     r = ritmo(p)
-    if fondo is None: fondo = coste_fondo(p) if modo_bloques(p) else 70000
+    if fondo is None: fondo = coste_fondo(p) if modo_bloques(p) else (COSTE_LIBRE if libre(p) else 70000)
     usado = fondo + coste_sprites(p) + 8000
     disponible = r * 69888
-    if usado <= disponible: return 50 // r, usado, disponible
+    if usado <= disponible: return round(50 / r, 1), usado, disponible
     vueltas = -(-usado // 69888)
     return round(50 / vueltas, 1), usado, disponible
 
@@ -172,6 +175,7 @@ def velocidad_scroll(p):
     """Píxeles por fotograma de juego a los que avanza el scroll (aprox.): sigue a la jugadora a su
     velocidad o, en automático, un carácter cada vel_auto fotogramas."""
     sc = p['scroll']
+    if pantallas(p): return 0
     if sc.get('modo') == 'auto': return max(1, -(-8 // max(1, sc.get('vel_auto', 6))))
     return max(1, min(4, p['jugador'].get('velocidad', 2)))
 
@@ -212,6 +216,8 @@ def actualizar(p):
     p['scroll'].setdefault('paso', 8)
     p['scroll'].setdefault('compilar_sprites', True)
     p['scroll'].setdefault('mezcla', False); p['scroll'].setdefault('color_sprites', False)
+    p['scroll'].setdefault('gravedad', False); p['scroll'].setdefault('umbral_v', 48)
+    p['scroll'].setdefault('colores', {'tinta': 7, 'papel': 0, 'brillo': 0})
     p['jugador'].setdefault('color', 0)
     for en in p.get('enemigos', []): en.setdefault('color', 0)
     p['jugador'].setdefault('arma', 'disparo'); p['jugador'].setdefault('alcance', 12)
@@ -253,15 +259,294 @@ def actualizar(p):
     p.setdefault('optimizar', True)
     if 'jugador' in p:
         p['jugador'].setdefault('cadencia', 6)
-    p['version'] = 9
+    if multidir(p):
+        for nv in p['niveles']:
+            rejilla(nv, factor(p)); nv['inicio'] = list(inicio_rejilla(nv, factor(p))); nv.setdefault('relleno', 0)
+    p['version'] = 10
     return p
 
 def horizontal(p):
     """Mapa horizontal (10 tiles de alto): modos horizontal y plataformas."""
     return p['scroll']['direccion'] in ('horizontal', 'plataformas')
 
+def pantallas(p):
+    """Pantalla a pantalla (sin scroll): el mapa es una rejilla de salas."""
+    return p['scroll']['direccion'] == 'pantallas'
+
+def libre(p):
+    """Scroll libre en 8 direcciones, píxel a píxel, con el fondo de dos colores."""
+    return p['scroll']['direccion'] == 'libre'
+
+def multidir(p):
+    """Modos con mapa en dos dimensiones (rejilla de pantallas): pantalla a pantalla y libre."""
+    return p['scroll']['direccion'] in ('pantallas', 'libre')
+
 def plataformas(p):
-    return p['scroll']['direccion'] == 'plataformas'
+    d = p['scroll']['direccion']
+    return d == 'plataformas' or (d in ('pantallas', 'libre') and bool(p['scroll'].get('gravedad')))
+
+# ---------------- tiles de 8x8 ----------------
+# Con tiles de 8x8 (p['tiles8']), cada tile del proyecto es un carácter: 'pix' de 8 filas de 8 y 'atr'
+# con un solo color, y el mapa tiene el doble de celdas en cada eje (también las posiciones de los
+# enemigos). Al generar, cada grupo de 2x2 caracteres que aparece en algún mapa se convierte en un
+# tile de 16x16 del motor (como mucho 256, o 128 en el scroll fino horizontal); el motor mira los
+# choques, los objetos y los cambios carácter a carácter con las tablas META (los 4 caracteres de cada
+# tile) y TRASM (el tile que queda al cambiar cada uno de sus cuartos).
+PROPS_JUNTAS = ('solido', 'detiene', 'plataforma', 'mortal', 'rompible', 'fragil', 'objeto', 'profundidad')
+
+def tile8_vacio(atr=0x07):
+    return {'pix': ['.' * 8 for _ in range(8)], 'atr': [atr], 'solido': False, 'detiene': False}
+
+def _tile_de_cuartos(chars, k):
+    """Tile de 16x16 con los caracteres k = (arriba-izq, arriba-dcha, abajo-izq, abajo-dcha)."""
+    cs = [chars[c] for c in k]
+    pix = [cs[(y // 8) * 2]['pix'][y % 8] + cs[(y // 8) * 2 + 1]['pix'][y % 8] for y in range(16)]
+    t = {'pix': pix, 'atr': [c['atr'][0] for c in cs], '_cuartos': tuple(k)}
+    for clave in PROPS_JUNTAS: t[clave] = any(c.get(clave) for c in cs)
+    for clave in ('linea_tras', 'linea_ante'):        # las líneas del primer cuarto que tenga
+        for q, c in enumerate(cs):
+            l = c.get(clave)
+            if l and c.get('profundidad'):
+                dx, dy = (q % 2) * 8, (q // 2) * 8
+                t[clave] = dict(l, p=[l['p'][0] + dx, l['p'][1] + dy, l['p'][2] + dx, l['p'][3] + dy]); break
+    for c in cs:                     # para el generador (objetos en el mapa, enemigos apoyados...)
+        if cambia(c):
+            for clave in ('accion', 'valor', 'mensaje', 'puntos', 'tras', 'llave', 'columna'):
+                if clave in c: t[clave] = c[clave]
+            break
+    return t
+
+def expandir_t8(p):
+    """Proyecto equivalente con tiles de 16x16 (los grupos de 2x2 caracteres) para el generador.
+    Sin tiles de 8x8, el mismo proyecto. Lleva '_t8': caracteres y tablas META y TRASM."""
+    if not p.get('tiles8'): return p
+    chars = p['tiles']
+    metas, lista = {(0, 0, 0, 0): 0}, [(0, 0, 0, 0)]
+    def meta(k):
+        if k not in metas: metas[k] = len(lista); lista.append(k)
+        return metas[k]
+    niveles = []
+    for nv in p['niveles']:
+        m = nv['mapa']; H, W = len(m) // 2, (len(m[0]) // 2 if m else 0)
+        n2 = dict(nv)
+        n2['mapa'] = [[meta((m[2 * y][2 * x], m[2 * y][2 * x + 1], m[2 * y + 1][2 * x], m[2 * y + 1][2 * x + 1]))
+                       for x in range(W)] for y in range(H)]
+        vistas, ap = set(), []
+        for a in nv['apariciones']:
+            b = {'tipo': a['tipo'], 'f': a['f'] // 2, 'c': a['c'] // 2}
+            if (b['f'], b['c']) not in vistas: vistas.add((b['f'], b['c'])); ap.append(b)
+        n2['apariciones'] = ap
+        if 'relleno' in nv:
+            r = nv['relleno'] if 0 <= nv['relleno'] < len(chars) else 0
+            n2['relleno'] = meta((r, r, r, r))
+        if 'pantallas' in nv: n2['pantallas'] = [list(f) for f in nv['pantallas']]
+        niveles.append(n2)
+    trasm, i = [], 0                 # cierre: los tiles que aparecen al cambiar caracteres
+    while i < len(lista):
+        k = lista[i]; fila = []
+        for q in range(4):
+            c = chars[k[q]] if k[q] < len(chars) else {}
+            t = c.get('tras', 0)
+            if cambia(c) and 0 <= t < len(chars) and t != k[q]:
+                k2 = list(k); k2[q] = t; fila.append(meta(tuple(k2)))
+            else: fila.append(i)
+        trasm.append(fila); i += 1
+    q = dict(p)
+    q['tiles8'] = False
+    q['tiles'] = [_tile_de_cuartos(chars, k) for k in lista]
+    q['niveles'] = niveles
+    q['_t8'] = {'chars': chars, 'meta': bytes(c for k in lista for c in k),
+                'trasm': bytes(min(255, v) for f in trasm for v in f), 'sig': trasm}
+    return q
+
+def props_tiles(p):
+    """Lista de tiles con las propiedades que lee el motor (con 8x8, los caracteres)."""
+    return p['_t8']['chars'] if '_t8' in p else p['tiles']
+
+def a_tiles8(p):
+    """Pasa el proyecto a tiles de 8x8: cada tile de 16x16 se parte en sus 4 caracteres (los repetidos se
+    juntan) y el mapa y los enemigos pasan a tener el doble de celdas en cada eje."""
+    if p.get('tiles8'): return
+    chars, idx, cuartos = [], {}, []
+    for t in p['tiles']:
+        k = []
+        for q in range(4):
+            fy, fx = (q // 2) * 8, (q % 2) * 8
+            c = {key: v for key, v in t.items() if key not in ('pix', 'atr', 'linea_tras', 'linea_ante')}
+            for clave in ('linea_tras', 'linea_ante'):       # las líneas, movidas al cuarto
+                l = t.get(clave)
+                if l and t.get('profundidad'):
+                    x0, y0, x1, y1 = l['p']
+                    c[clave] = dict(l, p=[x0 - fx, y0 - fy, x1 - fx, y1 - fy])
+            c['pix'] = [t['pix'][fy + y][fx:fx + 8] for y in range(8)]
+            c['atr'] = [t['atr'][q]]
+            firma = (tuple(c['pix']), c['atr'][0], tuple(sorted((a, str(b)) for a, b in c.items() if a not in ('pix', 'atr'))))
+            if firma not in idx: idx[firma] = len(chars); chars.append(c)
+            k.append(idx[firma])
+        cuartos.append(k)
+    for t, k in zip(p['tiles'], cuartos):
+        if cambia(t) and 0 <= t.get('tras', 0) < len(cuartos):
+            for q in range(4): chars[k[q]]['tras'] = cuartos[t['tras']][q]
+    if len(chars) > 256: raise ValueError(f'Salen {len(chars)} caracteres distintos (máximo 256).')
+    for nv in p['niveles']:
+        m = nv['mapa']
+        nv['mapa'] = [[cuartos[v][(y % 2) * 2 + x % 2] for x in range(len(m[0]) * 2) for v in [m[y // 2][x // 2]]]
+                      for y in range(len(m) * 2)]
+        nv['apariciones'] = [{'tipo': a['tipo'], 'f': a['f'] * 2, 'c': a['c'] * 2} for a in nv['apariciones']]
+        if 'relleno' in nv and 0 <= nv['relleno'] < len(cuartos): nv['relleno'] = cuartos[nv['relleno']][0]
+    p['tiles'] = chars
+    p['tiles8'] = True
+
+def de_tiles8(p):
+    """Vuelve a tiles de 16x16: cada grupo de 2x2 caracteres usado pasa a ser un tile (con las propiedades
+    juntadas de sus caracteres: sólido si alguno lo es...)."""
+    if not p.get('tiles8'): return
+    q = expandir_t8(p)
+    for t in q['tiles']: t.pop('_cuartos', None)
+    p['tiles'] = q['tiles']; p['niveles'] = q['niveles']; p['tiles8'] = False
+
+# ---------------- tiles de profundidad ----------------
+# Un tile de profundidad tapa a los personajes salvo que una línea diga otra cosa (ver el manual):
+#   'linea_tras': si el borde elegido del personaje queda por debajo de ella, manda el personaje;
+#   'linea_ante': si queda por debajo o en ella, manda el tile (y si está por encima, el personaje).
+# Cada línea: {'p': [x0, y0, x1, y1] (píxeles del tile; pueden salirse del tile hasta un tile más
+# por cada lado), 'borde': 0 inferior, 1 superior, 2 izquierdo, 3 derecho, 'pasable': True/False,
+# 'invertir': False/True}. El lado que cuenta como «por debajo»: debajo de la línea (bordes inferior y
+# superior) o a su derecha (izquierdo y derecho); con 'invertir', encima o a su izquierda.
+BORDES = ('inferior', 'superior', 'izquierdo', 'derecho')
+
+def valores_linea(l, lado=16):
+    """16 valores de la línea: su altura en cada columna (bordes inferior y superior) o su columna en
+    cada fila (izquierdo y derecho). Fuera del trozo dibujado, la del extremo más cercano."""
+    x0, y0, x1, y1 = l['p']
+    if l.get('borde', 0) >= 2: x0, y0, x1, y1 = y0, x0, y1, x1      # x en función de y
+    if x0 > x1: x0, y0, x1, y1 = x1, y1, x0, y0
+    res = []
+    for x in range(16):
+        xx = min(max(x, x0), x1)
+        v = y0 if x1 == x0 else y0 + (y1 - y0) * (xx - x0) / (x1 - x0)
+        res.append(int(round(v)) & 0xFF)
+    return res
+
+def bytes_linea(l, lado=16):
+    if not l: return bytes(17)
+    op = 0x80 | (l.get('borde', 0) & 3) | (0 if l.get('pasable', True) else 4) | (8 if l.get('invertir') else 0)
+    return bytes([op] + valores_linea(l, lado))
+
+def tabla_profundidad(p):
+    """(tabla, FLG): número de entradas y, por cada tile (o carácter) de profundidad, su número y sus
+    dos líneas; FLG: bits 0-3 bordes con líneas que no se traspasan, bit 4 hay profundidad."""
+    lado = 8 if '_t8' in p else 16
+    d, flg, n = bytearray(), 0, 0
+    for i, t in enumerate(props_tiles(p)):
+        if not t.get('profundidad'): continue
+        n += 1; flg |= 0x10
+        d += bytes([i]) + bytes_linea(t.get('linea_tras'), lado) + bytes_linea(t.get('linea_ante'), lado)
+        for l in (t.get('linea_tras'), t.get('linea_ante')):
+            if l and not l.get('pasable', True): flg |= 1 << (l.get('borde', 0) & 3)
+    return bytes([n]) + bytes(d), flg
+
+def hay_profundidad(p):
+    return any(t.get('profundidad') for t in p['tiles'])
+
+def max_pares_mem(p):
+    """Memoria para los bloques del scroll fino: si hay tiles de profundidad, sus rutinas van en el final."""
+    return MAX_PARES_MEM - (0x600 if hay_profundidad(p) else 0)
+
+# ---------------- mapa en dos dimensiones (pantalla a pantalla y scroll libre) ----------------
+PANT_ANCHO, PANT_ALTO = 12, 10            # una pantalla: 12 x 10 tiles (192 x 160 píxeles, el área entera)
+MAX_REJILLA = 16                          # hasta 16 x 16 pantallas por fase
+COPIAS_LIBRE = (0xDB00, 0xF900)           # banco 7: dos de las cuatro copias del fondo del scroll libre
+
+def factor(p):
+    """Celdas del mapa por cada tile de 16 píxeles, en cada eje: 2 con tiles de 8x8, 1 con los de 16x16."""
+    return 2 if p.get('tiles8') else 1
+
+def lado_tile(p):
+    return 8 if p.get('tiles8') else 16
+
+def rejilla(nv, f=1):
+    """Rejilla de pantallas de una fase en dos dimensiones: filas de True (hay pantalla) / False.
+    f: factor (2 si el mapa es de tiles de 8x8)."""
+    m = nv['mapa']
+    gh, gw = max(1, len(m) // (PANT_ALTO * f)), max(1, len(m[0]) // (PANT_ANCHO * f))
+    g = nv.get('pantallas')
+    if not g or len(g) != gh or len(g[0]) != gw:
+        g = [[bool(g[y][x]) if g and y < len(g) and x < len(g[0]) else True for x in range(gw)] for y in range(gh)]
+        nv['pantallas'] = g
+    return g
+
+def inicio_rejilla(nv, f=1):
+    """(columna, fila) de la pantalla en la que se empieza (la primera que exista si no se ha elegido)."""
+    g = rejilla(nv, f)
+    ini = nv.get('inicio')
+    if ini and 0 <= ini[1] < len(g) and 0 <= ini[0] < len(g[0]) and g[ini[1]][ini[0]]:
+        return tuple(ini)
+    for y, fila in enumerate(g):
+        for x, v in enumerate(fila):
+            if v: return (x, y)
+    return (0, 0)
+
+def nivel_2d(nombre, gw=3, gh=2, tile=0, relleno=1, f=1):
+    return {'nombre': nombre, 'mapa': [[tile] * (gw * PANT_ANCHO * f) for _ in range(gh * PANT_ALTO * f)],
+            'apariciones': [], 'pantallas': [[True] * gw for _ in range(gh)], 'inicio': [0, 0],
+            'relleno': relleno}
+
+def fijar_rejilla(nv, gw, gh, tile=0, k=1):
+    """Cambia el tamaño de la rejilla (por la derecha y por abajo). Las pantallas nuevas existen.
+    k: factor (2 con tiles de 8x8)."""
+    g = rejilla(nv, k); m = nv['mapa']; PA, PL = PANT_ANCHO * k, PANT_ALTO * k
+    nm = [[m[f][c] if f < len(m) and c < len(m[0]) else tile for c in range(gw * PA)]
+          for f in range(gh * PL)]
+    ng = [[g[y][x] if y < len(g) and x < len(g[0]) else True for x in range(gw)] for y in range(gh)]
+    nv['mapa'], nv['pantallas'] = nm, ng
+    nv['apariciones'] = [a for a in nv['apariciones'] if a['f'] < gh * PL and a['c'] < gw * PA]
+    nv['inicio'] = list(inicio_rejilla(nv, k))
+
+def a_rejilla(nv, era_horizontal, k=1):
+    """Convierte una fase de una tira (horizontal o vertical) en una rejilla de pantallas."""
+    m = nv['mapa']
+    PANT_ANCHO, PANT_ALTO = globals()['PANT_ANCHO'] * k, globals()['PANT_ALTO'] * k
+    if era_horizontal:
+        gw = max(1, -(-len(m[0]) // PANT_ANCHO)); gh = 1
+        nm = [[fila[c] if c < len(fila) else 0 for c in range(gw * PANT_ANCHO)] for fila in m]
+        ap = list(nv['apariciones'])
+    else:                                  # el vertical empieza abajo: se rellena por arriba
+        gh = max(1, -(-len(m) // PANT_ALTO)); gw = 1
+        falta = gh * PANT_ALTO - len(m)
+        nm = [[0] * PANT_ANCHO for _ in range(falta)] + [list(f) for f in m]
+        ap = [{'tipo': a['tipo'], 'f': a['f'] + falta, 'c': a['c']} for a in nv['apariciones']]
+    nv['mapa'], nv['apariciones'] = nm, ap
+    nv['pantallas'] = [[True] * gw for _ in range(gh)]
+    nv['inicio'] = [0, gh - 1] if not era_horizontal else [0, 0]
+    nv.setdefault('relleno', 0)
+
+def de_rejilla(nv, a_horizontal, k=1):
+    """De rejilla a tira: la primera fila de pantallas (horizontal) o la primera columna (vertical)."""
+    m = nv['mapa']
+    PANT_ANCHO, PANT_ALTO = globals()['PANT_ANCHO'] * k, globals()['PANT_ALTO'] * k
+    if a_horizontal:
+        nv['mapa'] = [list(f) for f in m[:PANT_ALTO]]
+        nv['apariciones'] = [a for a in nv['apariciones'] if a['f'] < PANT_ALTO]
+    else:
+        nv['mapa'] = [list(f[:PANT_ANCHO]) for f in m]
+        nv['apariciones'] = [a for a in nv['apariciones'] if a['c'] < PANT_ANCHO]
+    for k in ('pantallas', 'inicio'): nv.pop(k, None)
+
+def mapa_libre(p, nv):
+    """(ancho W, alto H, desplazamiento k, bytes) del mapa del scroll libre: por filas, cada fila de 2^k
+    bytes (para que el motor multiplique con desplazamientos). Las pantallas que no existen se rellenan
+    con el tile de relleno."""
+    g = rejilla(nv); m = nv['mapa']
+    W, H = len(g[0]) * PANT_ANCHO, len(g) * PANT_ALTO
+    k = max(4, (W - 1).bit_length())
+    rell = nv.get('relleno', 0)
+    if not 0 <= rell < len(p['tiles']): rell = 0
+    d = bytearray()
+    for f in range(H):
+        fila = [m[f][c] if g[f // PANT_ALTO][c // PANT_ANCHO] else rell for c in range(W)]
+        d += bytes(fila) + bytes((1 << k) - W)
+    return W, H, k, bytes(d)
 
 def fisica_defecto():
     return {'altura': 40, 'subida': 10, 'caida_max': 6}
@@ -277,8 +562,9 @@ def tablas_salto(f):
     caida = [max(1, min(f['caida_max'], round(d(t)) - round(d(t - 1)))) for t in range(1, 17)]
     return subida, caida
 
-def convertir_apariciones(apariciones, mapa_antes, a_horizontal):
+def convertir_apariciones(apariciones, mapa_antes, a_horizontal, k=1):
     """Gira las posiciones de los enemigos igual que el mapa."""
+    MAPA_ALTO, MAPA_ANCHO, AREA_ALTO = globals()['MAPA_ALTO'] * k, globals()['MAPA_ANCHO'] * k, globals()['AREA_ALTO'] * k
     res = []
     for a in apariciones:
         if a_horizontal:
@@ -292,9 +578,11 @@ def convertir_apariciones(apariciones, mapa_antes, a_horizontal):
         res.append({'tipo': a['tipo'], 'f': f, 'c': c})
     return res
 
-def convertir_mapa(mapa, a_horizontal):
+def convertir_mapa(mapa, a_horizontal, k=1):
     """Gira el mapa al cambiar de dirección: lo que estaba abajo (inicio vertical)
-    pasa a la izquierda (inicio horizontal), y al revés."""
+    pasa a la izquierda (inicio horizontal), y al revés. k: factor (2 con tiles de 8x8)."""
+    MAPA_ALTO, MAPA_ANCHO = globals()['MAPA_ALTO'] * k, globals()['MAPA_ANCHO'] * k
+    AREA_ANCHO, AREA_ALTO = globals()['AREA_ANCHO'] * k, globals()['AREA_ALTO'] * k
     if a_horizontal:                      # filas de 12 -> 10 filas de N columnas
         n = len(mapa)
         largo = max(n, AREA_ANCHO // 2)
@@ -373,6 +661,12 @@ def lineas_mensaje(m):
 
 def variantes(p, n):
     """Tiles en los que puede convertirse el tile n (él incluido), siguiendo la cadena de «tras»."""
+    if '_t8' in p:                  # tiles de 8x8: todos a los que se llega cambiando sus cuartos
+        vistos, pend = [n], [n]
+        while pend:
+            for v in p['_t8']['sig'][pend.pop()]:
+                if v not in vistos: vistos.append(v); pend.append(v)
+        return vistos
     vistos = [n]
     while cambia(p['tiles'][vistos[-1]]):
         sig = p['tiles'][vistos[-1]].get('tras', 0)
@@ -441,7 +735,7 @@ def mezcla(p):
     return bool(p['scroll'].get('mezcla')) and modo_bloques(p)
 
 def color_sprites(p):
-    return bool(p['scroll'].get('color_sprites')) and modo_bloques(p)
+    return bool(p['scroll'].get('color_sprites')) and (modo_bloques(p) or libre(p))
 
 def atr_color(c):
     """Color propio de un personaje -> byte para el motor (brillo + tinta, 0 = el del fondo)."""
@@ -492,14 +786,15 @@ def compilar_bloques(bloques):
 def usa_compilados(p, n_pares=None):
     """Los bloques compilados ocupan unas tres veces más: solo si caben en memoria baja."""
     if not modo_bloques(p): return False
+    p = expandir_t8(p)
     pares = pares_proyecto(p)
     if n_pares is None: n_pares = len(representantes(p, pares))
     bloques, _ = datos_bloques(p, pares)
     if mezcla(p):
         bloques += datos_bloques(p, pares, 1)[0]
         tam = _pag(n_pares * (8 // p['scroll']['paso']) * largo_compilado(bloques))
-        return 2 * tam <= MAX_PARES_MEM
-    return n_pares * (8 // p['scroll']['paso']) * largo_compilado(bloques) <= MAX_PARES_MEM
+        return 2 * tam <= max_pares_mem(p)
+    return n_pares * (8 // p['scroll']['paso']) * largo_compilado(bloques) <= max_pares_mem(p)
 
 def _pag(n):
     return (n + 255) // 256 * 256
@@ -526,16 +821,21 @@ def mapa_pares(p, n, pares):
     return bytes(pares[(_media_col(p, m, f, c), _media_col(p, m, f, c + 1))]
                  for c in range(len(m[0]) * 2) for f in range(MAPA_ALTO))
 
+COSTE_LIBRE = 98000                 # scroll libre: volcado de las 4 copias del fondo y filas o columnas nuevas
+
 def ritmo(p):
     """Interrupciones por fotograma de juego (cadencia fija): 2 = 25 fps, 3 = 16,7 fps."""
     if mezcla(p): return 1                  # las dos pantallas se alternan en cada interrupción
     if p['scroll'].get('ritmo'): return p['scroll']['ritmo']
+    if libre(p):
+        return 2 if COSTE_LIBRE + coste_sprites(p) + 8000 <= 2 * 69888 else 3
     if not modo_bloques(p): return 2
     return 2 if coste_fondo(p) <= 95000 else 3
 
 def coste_fondo(p):
     """Estimación del coste (ciclos) de dibujar el fondo en el tramo de 24 columnas más cargado de
     todas las fases: casillas con contenido (más caras si los bloques no van compilados) y vacías."""
+    p = expandir_t8(p)
     pares = pares_proyecto(p)
     por_casilla = 350 if usa_compilados(p) else 520
     k = parejas_sin_pixeles(p, pares)             # las parejas sin píxeles no se dibujan
@@ -547,10 +847,23 @@ def coste_fondo(p):
             peor = max(peor, sum(cols[c:c + AREA_ANCHO]))
     return peor * por_casilla + (AREA_ANCHO * MAPA_ALTO - peor) * 77
 
+_ESPANOL = True                          # (lo fija repartir_bancos según la fuente del proyecto)
+
+def tipo_fuente(p):
+    """'espanola' (por defecto: la fuente propia del generador con tildes, ñ, ¿ y ¡), 'rom' o 'propia'."""
+    pa = p['partida']
+    if pa.get('fuente'): return 'propia'
+    return 'rom' if pa.get('fuente_rom') else 'espanola'
+
+def fuente_efectiva(p):
+    """Los 768 bytes de la fuente que lleva el juego, o None para la de la ROM."""
+    t = tipo_fuente(p)
+    if t == 'propia': return bytes(p['partida']['fuente'])
+    return fuente_es.datos() if t == 'espanola' else None
+
 def a_ascii(texto):
-    t = unicodedata.normalize('NFKD', texto)
-    t = ''.join(c for c in t if not unicodedata.combining(c))
-    return bytes(ord(c) if 32 <= ord(c) < 127 else ord('?') for c in t)
+    """Texto -> bytes del motor. Con la fuente española conserva tildes, ñ, ¿ y ¡; si no, las quita."""
+    return fuente_es.codificar(texto, _ESPANOL)
 
 def datos_textos(textos):
     d = bytearray()
@@ -581,6 +894,31 @@ def marco_defecto(col, fila):
 
 def comprobar(p):
     """Devuelve una lista de problemas (vacía si todo está bien)."""
+    if p.get('tiles8'):            # tiles de 8x8: lo propio, y lo demás con los grupos de 2x2
+        e = []
+        if not p['tiles']: return ['No hay tiles.']
+        if len(p['tiles']) > 256: e.append('Máximo 256 tiles de 8x8.')
+        if any(len(t['pix']) != 8 or any(len(f) != 8 for f in t['pix']) or len(t['atr']) != 1 for t in p['tiles']):
+            e.append('Con tiles de 8x8, todos los tiles tienen que ser de 8x8 (un color cada uno).')
+        for nv in p['niveles']:
+            m = nv['mapa']
+            if not m or len(m) % 2 or any(len(f) != len(m[0]) or len(f) % 2 for f in m):
+                e.append(f'{nv["nombre"]}: con tiles de 8x8, el mapa tiene que tener un número par de filas y de columnas.')
+            elif any(v >= len(p['tiles']) for f in m for v in f):
+                e.append(f'{nv["nombre"]}: el mapa usa un tile que no existe.')
+        if e: return e
+        q = expandir_t8(p)
+        e = _comprobar(q)
+        if len(q['tiles']) > 256:
+            e.append(f'Los mapas usan {len(q["tiles"])} grupos distintos de 2x2 tiles de 8x8 (contando los que salen al '
+                     'romper o recoger): el motor admite 256. Repite más las mismas combinaciones.')
+        elif modo_bloques(q) and len(q['tiles']) > 128:
+            e.append(f'El scroll fino horizontal admite 128 grupos distintos de 2x2 tiles de 8x8 y los mapas usan '
+                     f'{len(q["tiles"])} (contando los que salen al romper o recoger).')
+        return [x for x in e if not x.startswith(('Máximo 256 tiles', 'El scroll fino horizontal admite como máximo 128'))]
+    return _comprobar(p)
+
+def _comprobar(p):
     e = []
     a = p['area']
     if not 0 <= a['col'] <= 7: e.append('La columna del área debe estar entre 0 y 7.')
@@ -591,7 +929,25 @@ def comprobar(p):
     if not 1 <= len(p['niveles']) <= MAX_NIVELES: e.append(f'Hace falta de 1 a {MAX_NIVELES} fases.')
     for nv in p['niveles']:
         m, n = nv['mapa'], nv['nombre']
-        if horizontal(p):
+        if multidir(p):
+            g = rejilla(nv); gh, gw = len(g), len(g[0])
+            if not (1 <= gw <= MAX_REJILLA and 1 <= gh <= MAX_REJILLA):
+                e.append(f'{n}: la rejilla de pantallas va de 1x1 a {MAX_REJILLA}x{MAX_REJILLA}.')
+            elif len(m) != gh * PANT_ALTO or any(len(f) != gw * PANT_ANCHO for f in m):
+                e.append(f'{n}: el mapa no coincide con la rejilla de pantallas.')
+            if not any(any(f) for f in g): e.append(f'{n}: no tiene ninguna pantalla.')
+            if libre(p):
+                W, H, k, d = mapa_libre(p, nv)
+                if len(d) + 36 * len(p['tiles']) > 15000:
+                    e.append(f'{n}: el mapa ocupa {len(d)} bytes (cada fila se guarda con {1 << k} tiles); con '
+                             'los tiles no cabe en un banco. Usa menos pantallas, sobre todo a lo ancho.')
+                if not 0 <= nv.get('relleno', 0) < len(p['tiles']):
+                    e.append(f'{n}: el tile de relleno no existe.')
+            gx, gy = inicio_rejilla(nv)
+            for a in nv['apariciones']:
+                if 0 <= a['f'] < len(m) and 0 <= a['c'] < len(m[0]) and not g[a['f'] // PANT_ALTO][a['c'] // PANT_ANCHO]:
+                    e.append(f'{n}: hay enemigos colocados en una pantalla que no existe.'); break
+        elif horizontal(p):
             if len(m) != MAPA_ALTO: e.append(f'{n}: el mapa horizontal debe tener {MAPA_ALTO} filas de tiles.')
             elif len(m[0]) < AREA_ANCHO // 2: e.append(f'{n}: el mapa necesita al menos {AREA_ANCHO // 2} columnas.')
             elif any(len(f) != len(m[0]) for f in m): e.append(f'{n}: las filas del mapa tienen distinto largo.')
@@ -610,7 +966,7 @@ def comprobar(p):
     if sc.get('paso', 8) not in (1, 2, 4, 8): e.append('El paso del scroll debe ser 1, 2, 4 u 8 píxeles.')
     elif modo_bloques(p) and all(len(nv['mapa']) == MAPA_ALTO for nv in p['niveles']):
         n = len(representantes(p, pares_proyecto(p))); por_par = 16 * 8 // sc['paso']
-        limite = min(MAX_PARES, (MAX_PARES_MEM // 2 if mezcla(p) else MAX_PARES_MEM) // por_par)
+        limite = min(MAX_PARES, (max_pares_mem(p) // 2 if mezcla(p) else max_pares_mem(p)) // por_par)
         if n > limite:
             e.append(f'El scroll fino de {sc["paso"]} px admite {limite} combinaciones distintas de columnas vecinas '
                      f'y las fases tienen {n}. Usa un paso mayor, repite más los mismos tiles juntos o usa paso 8.')
@@ -618,9 +974,11 @@ def comprobar(p):
         elif any(cambia(t) for t in p['tiles']) and len(pares_proyecto(p)) > 255:
             e.append('Demasiadas combinaciones de tiles que cambian (rompibles u objetos) junto a otros tiles: '
                      'usa menos variedad alrededor de ellos.')
-    if (sc.get('mezcla') or sc.get('color_sprites')) and not modo_bloques(p):
-        e.append('El modo mezcla y el color propio de los personajes necesitan scroll horizontal (o de '
-                 'plataformas) con paso de 1, 2 o 4 píxeles.')
+    if multidir(p) and sc.get('modo') == 'auto': e.append('Pantalla a pantalla y scroll libre no tienen modo automático.')
+    if sc.get('mezcla') and not modo_bloques(p):
+        e.append('El modo mezcla necesita scroll horizontal (o de plataformas) con paso de 1, 2 o 4 píxeles.')
+    if sc.get('color_sprites') and not (modo_bloques(p) or libre(p)):
+        e.append('El color propio de los personajes necesita scroll horizontal fino (paso 1, 2 o 4) o libre.')
     if plataformas(p):
         fi = sc['fisica']
         if not 8 <= fi['altura'] <= 120: e.append('Altura de salto: de 8 a 120 píxeles.')
@@ -631,7 +989,12 @@ def comprobar(p):
     w, h = graficos.TAMANOS[j['tamano']]
     if not 0 <= j['x'] <= 192 - w: e.append(f'X inicial del jugador: 0 a {192 - w}.')
     if not 0 <= j['y'] <= 160 - h: e.append(f'Y inicial del jugador: 0 a {160 - h}.')
-    if sc['modo'] == 'sigue':
+    if libre(p):
+        if not 0 <= sc['umbral'] <= (192 - w) // 2 - 4:
+            e.append(f'Margen horizontal del scroll libre: 0 a {(192 - w) // 2 - 4} con este tamaño de jugador.')
+        if not 0 <= sc.get('umbral_v', 48) <= (160 - h) // 2 - 4:
+            e.append(f'Margen vertical del scroll libre: 0 a {(160 - h) // 2 - 4} con este tamaño de jugador.')
+    elif sc['modo'] == 'sigue' and not pantallas(p):
         lado = 192 - w if horizontal(p) else 160 - h       # recorrido del jugador en el eje del scroll
         if not 0 <= sc['umbral'] <= lado - 8:
             e.append(f'Umbral de avance: 0 a {lado - 8} con este tamaño de jugador.')
@@ -662,7 +1025,7 @@ def comprobar(p):
     if j.get('arma') == 'laser':
         if not 1 <= la.get('grosor', 1) <= 3: e.append('Láser: grosor de 1 a 3 líneas.')
         if not 1 <= la.get('duracion', 4) <= 50: e.append('Láser: se ve de 1 a 50 fotogramas.')
-    if not modo_bloques(p):
+    if not modo_bloques(p) and not libre(p):
         svj, sve, svb, svbe = tamanos_a_la_vez(p)
         if svj + sve + svb + svbe > SAVE_TOTAL:
             e.append('Los sprites son demasiado grandes para este tipo de scroll (vertical u horizontal de 8 en 8): '
@@ -697,9 +1060,10 @@ def comprobar(p):
     for clave in ('fase', 'game_over', 'final'):
         if len(pa['mensajes'][clave]) > 20: e.append(f'El mensaje «{clave}» tiene más de 20 letras.')
     distintos = []
-    for i, t in enumerate(p['tiles']):
+    tp = props_tiles(p)
+    for i, t in enumerate(tp):
         if not cambia(t): continue
-        if not 0 <= t.get('tras', 0) < len(p['tiles']):
+        if not 0 <= t.get('tras', 0) < len(tp):
             e.append(f'El tile {i} se convierte en un tile que no existe ({t.get("tras")}).')
         if t.get('objeto') and t.get('accion') == 'fase' and not 1 <= t.get('valor', 1) <= len(p['niveles']):
             e.append(f'El objeto del tile {i} lleva a la fase {t.get("valor")}, que no existe.')
@@ -719,7 +1083,7 @@ def comprobar(p):
     es = estrategia(p); ne = len(es['elementos'])
     if ne > MAX_ELEMENTOS: e.append(f'Como mucho {MAX_ELEMENTOS} elementos de inventario.')
     if len(es['reglas']) > MAX_REGLAS: e.append(f'Como mucho {MAX_REGLAS} reglas de combinación.')
-    for i, t in enumerate(p['tiles']):
+    for i, t in enumerate(tp):
         if t.get('objeto') and t.get('accion') == 'guardar' and not 0 <= t.get('valor', 0) < max(1, ne):
             e.append(f'El objeto del tile {i} guarda el elemento {t.get("valor")}, que no existe.')
         if t.get('objeto') and t.get('accion') in ('guardar', 'altar') and not ne:
@@ -736,10 +1100,18 @@ def comprobar(p):
         if not mensaje_valido(r.get('mensaje', '')): e.append(f'Regla {k + 1}: el mensaje tiene líneas de más de 20 letras.')
         if r.get('cuando') == 'personaje' and r.get('personaje', -1) not in personajes(p):
             e.append(f'Regla {k + 1}: el personaje con el que se habla no existe (o ya no es un personaje).')
-    todos = set(m for m in [t.get('mensaje') for t in p['tiles'] if t.get('objeto')] +
+    todos = set(m for m in [t.get('mensaje') for t in tp if t.get('objeto')] +
                 [r.get('mensaje') for r in es['reglas']] + [es['falta']] if m)
     if len(todos) > SIN_MSG: e.append(f'Objetos, reglas y altar pueden usar como mucho {SIN_MSG} mensajes distintos.')
     if pa.get('fuente') is not None and len(pa['fuente']) != 768: e.append('La fuente debe tener 768 bytes.')
+    for i, t in enumerate(tp):
+        if not t.get('profundidad'): continue
+        for clave, nombre in (('linea_tras', 'Tras'), ('linea_ante', 'Ante')):
+            l = t.get(clave)
+            if l and (len(l.get('p', [])) != 4 or not 0 <= l.get('borde', 0) <= 3 or
+                      any(not -16 <= v <= 31 for v in l['p'])):
+                e.append(f'Tile {i}: la línea {nombre} no es válida.')
+    if sum(1 for t in tp if t.get('profundidad')) > 255: e.append('Como mucho 255 tiles de profundidad.')
     mus = pa.get('musica', {})
     for clave in ('menu', 'juego'):
         if mus.get(clave) and info_pt3(mus[clave]) is None: e.append(f'La música de {clave} no es un módulo PT3.')
@@ -781,8 +1153,19 @@ def datos_nivel(p, n, base=0xC000, comunes=None):
     a, j, sc = p['area'], p['jugador'], p['scroll']
     nv = p['niveles'][n]; m = nv['mapa']
     # en el scroll fino por bloques el motor dibuja con los bloques pre-desplazados: no lee los tiles
-    tiles = b'' if modo_bloques(p) else b''.join(graficos.bytes_tile(t) for t in p['tiles'])
-    if horizontal(p):     # por columnas: 10 tiles por columna, de izquierda a derecha
+    # (salvo para redibujar los tiles de profundidad que tapan a los personajes)
+    tiles = b'' if modo_bloques(p) and not hay_profundidad(p) else b''.join(graficos.bytes_tile(t) for t in p['tiles'])
+    tp = props_tiles(p)              # propiedades: de cada tile o, con 8x8, de cada carácter
+    salas_d = None
+    if pantallas(p):      # pantalla a pantalla: cada sala, por columnas como el horizontal (12 x 10)
+        g = rejilla(nv)
+        salas_d = [(x, y) for y in range(len(g)) for x in range(len(g[0])) if g[y][x]]
+        largo = PANT_ANCHO
+        mapa = b''
+    elif libre(p):        # scroll libre: por filas de 2^k tiles
+        W, H, k_libre, mapa = mapa_libre(p, nv)
+        largo = H
+    elif horizontal(p):     # por columnas: 10 tiles por columna, de izquierda a derecha
         largo = len(m[0])
         mapa = bytes(m[f][c] for c in range(largo) for f in range(MAPA_ALTO))
     else:                 # por filas: 12 tiles por fila, de arriba abajo
@@ -791,10 +1174,10 @@ def datos_nivel(p, n, base=0xC000, comunes=None):
     flags = bytes((1 if t.get('solido') else 0) | (2 if t.get('detiene') else 0) |
                   (4 if t.get('plataforma') else 0) | (8 if t.get('mortal') else 0) |
                   (16 if t.get('rompible') else 0) | (32 if t.get('fragil') else 0) |
-                  (64 if t.get('objeto') else 0) for t in p['tiles'])
+                  (64 if t.get('objeto') else 0) | (128 if t.get('profundidad') else 0) for t in tp)
     mensajes = mensajes_objetos(p)
     tprop = bytearray()
-    for t in p['tiles']:
+    for t in tp:
         dec = min(99, t.get('puntos', 0) // 10)
         valor = t.get('valor', 0) if t.get('accion') == 'guardar' else max(1, t.get('valor', 1))
         if es_puerta(t):            # puerta: elemento necesario + 1, fase, mensaje, columna de entrada
@@ -811,24 +1194,51 @@ def datos_nivel(p, n, base=0xC000, comunes=None):
                            for ((ta, ma), (tb, mb)), k in pares_proyecto(p).items())
     hay_obj = any(p['tiles'][v].get('objeto') for fila in m for v in fila)
     # (el motor copia 256 bytes, pero solo lee los de los tiles que existen: no hace falta rellenar)
-    apar = datos_apariciones(p, n)
+    apar = b'' if pantallas(p) else datos_apariciones(p, n)
     parmap = mapa_pares(p, n, pares_proyecto(p)) if modo_bloques(p) else b''
     reglas = datos_reglas(p)                  # justo antes de las propiedades de los tiles
     comunes = {} if comunes is None else comunes
-    secciones, pos = [], base + 32
+    prof, flg = tabla_profundidad(p)
+    t8 = p.get('_t8')
+    con_ext = bool(t8 or flg)                 # 8 bytes más tras la cabecera (bit 7 del ritmo)
+    secciones, pos = [], base + (40 if con_ext else 32)
     def colocar(datos, compartible):
         nonlocal pos
         if compartible and datos in comunes: return comunes[datos]
         direccion = pos; secciones.append(datos); pos += len(datos)
+        if pos > 0x10000: raise ValueError(f'{nv["nombre"]} no cabe en el banco a partir de 0x{base:04X}.')
         if compartible: comunes[datos] = direccion
         return direccion
     dir_tiles = colocar(tiles, True) if tiles else 0
-    dir_mapa = colocar(mapa, False)            # el mapa y el de parejas cambian en la partida: propios
+    dir_salas = 0
+    if salas_d is not None:
+        gx0, gy0 = inicio_rejilla(nv)
+        dirs_sala = []
+        for (x, y) in salas_d:
+            sala = bytes(m[y * PANT_ALTO + f][x * PANT_ANCHO + c] for c in range(PANT_ANCHO) for f in range(PANT_ALTO))
+            dm = colocar(sala, False)
+            da = colocar(apariciones_sala(p, nv, x, y), False)
+            dirs_sala.append((dm, da))
+        dir_mapa, dir_apar = dirs_sala[salas_d.index((gx0, gy0))]
+        g = rejilla(nv); gw, gh = len(g[0]), len(g)
+        dir_salas = pos
+        tabla = dir_salas + 4 + gw * gh
+        bloque = bytearray([gw, gh]) + tabla.to_bytes(2, 'little')
+        bloque += bytes((salas_d.index((x, y)) + 1) if g[y][x] else 0 for y in range(gh) for x in range(gw))
+        for dm, da in dirs_sala: bloque += dm.to_bytes(2, 'little') + da.to_bytes(2, 'little')
+        assert colocar(bytes(bloque), False) == dir_salas
+    else:
+        dir_mapa = colocar(mapa, False)            # el mapa y el de parejas cambian en la partida: propios
     dir_flags = colocar(bytes(flags), True)
-    dir_apar = colocar(apar, False)
+    if salas_d is None: dir_apar = colocar(apar, False)
     dir_parmap = colocar(parmap, False)
     dir_tprop = colocar(reglas + bytes(tprop), True) + len(reglas)
     dir_parlist = colocar(parlist, True)
+    dir_meta = colocar(t8['meta'], True) if t8 else 0
+    dir_trasm = colocar(t8['trasm'], True) if t8 else 0
+    dir_prof = colocar(prof, True) if flg else 0
+    ext = (dir_meta.to_bytes(2, 'little') + dir_trasm.to_bytes(2, 'little') + dir_prof.to_bytes(2, 'little') +
+           bytes([1 if t8 else 0, flg]))
     if pos > 0x10000:
         raise ValueError(f'{nv["nombre"]} no cabe en el banco a partir de 0x{base:04X}.')
     cab = bytearray(32)
@@ -836,22 +1246,28 @@ def datos_nivel(p, n, base=0xC000, comunes=None):
     cab[2:4] = dir_tiles.to_bytes(2, 'little'); cab[4:6] = dir_mapa.to_bytes(2, 'little')
     cab[6], cab[7] = a['col'], a['fila']
     cab[8], cab[9], cab[10], cab[11] = j['x'], j['y'], j['velocidad'], sc['umbral']
-    cab[12] = 1 if horizontal(p) else 0
+    cab[12] = 1 if horizontal(p) or multidir(p) else 0
     cab[13] = 1 if sc['modo'] == 'auto' else 0
     cab[14] = 1 if sc['retroceso'] else 0
     cab[15] = sc['vel_auto']
-    cab[16] = sc['umbral_ret']
+    cab[16] = sc.get('umbral_v', 48) if libre(p) else sc['umbral_ret']
     cab[17:19] = dir_apar.to_bytes(2, 'little')
     cab[19:21] = dir_flags.to_bytes(2, 'little')
     cab[21] = j.get('cadencia', 6)
     cab[22] = sc.get('paso', 8)
-    cab[23] = ritmo(p)
+    cab[23] = ritmo(p) | (0x80 if con_ext else 0)
     cab[24:26] = dir_parmap.to_bytes(2, 'little')
     cab[26:28] = dir_tprop.to_bytes(2, 'little')
     cab[28:30] = dir_parlist.to_bytes(2, 'little')
     cab[30] = len(parlist) // 3
     cab[31] = (len(reglas) // 6) << 1 | (1 if hay_obj else 0)
-    d = bytes(cab) + b''.join(secciones)
+    if multidir(p):
+        gx0, gy0 = inicio_rejilla(nv)
+        cab[28], cab[29], cab[30] = gx0, gy0, 0
+        if pantallas(p): cab[24:26] = dir_salas.to_bytes(2, 'little')
+        else: cab[24], cab[25] = W, k_libre
+        cab[13], cab[14] = 0, 0
+    d = bytes(cab) + (ext if con_ext else b'') + b''.join(secciones)
     if len(d) > 16384:
         raise ValueError(f'{nv["nombre"]} ocupa {len(d)} bytes (máximo 16384). Reduce tiles o el largo del mapa.')
     return d
@@ -861,7 +1277,7 @@ def mensajes_objetos(p):
     lista = []
     def anadir(m):
         if m and m not in lista: lista.append(m)
-    for t in p['tiles']:
+    for t in props_tiles(p):
         if t.get('objeto') and t.get('accion') in ('fase', 'ganar', 'perder', 'mensaje', 'puerta'):
             anadir(t.get('mensaje'))
     for en in p['enemigos']:
@@ -895,6 +1311,19 @@ def datos_apariciones(p, n):
     """Lista ordenada por progreso: progreso, coordenada del mundo (caracteres) en el eje
     del scroll, coordenada transversal (px) y tipo. Termina en 0xFFFF."""
     lista = []
+    if libre(p):
+        # scroll libre: x e y del mundo en píxeles, tipo y estado (lo cambia el motor). Por x.
+        nv = p['niveles'][n]; mapa = nv['mapa']
+        for a in nv['apariciones']:
+            en = p['enemigos'][a['tipo']]
+            w, h = graficos.TAMANOS[en['tamano']]
+            y = a['f'] * 16
+            if plataformas(p) and en['comportamiento'] in ('patrulla', 'quieto', 'personaje'):
+                y = _apoyar(p, mapa, a['f'], a['c'], h, y)
+            lista.append((a['c'] * 16, y, a['tipo']))
+        lista.sort()
+        return b''.join(x.to_bytes(2, 'little') + y.to_bytes(2, 'little') + bytes([t, 0])
+                        for x, y, t in lista) + b'\xff\xff'
     if horizontal(p):
         largo2 = len(p['niveles'][n]['mapa'][0]) * 2
         mapa = p['niveles'][n]['mapa']
@@ -920,6 +1349,23 @@ def datos_apariciones(p, n):
         d += prog.to_bytes(2, 'little') + mundo.to_bytes(2, 'little') + bytes([trans, tipo])
     return bytes(d) + b'\xff\xff'
 
+def apariciones_sala(p, nv, x, y):
+    """Pantalla a pantalla: lista de apariciones de una sala (todas a la vez al entrar)."""
+    d = bytearray()
+    m = nv['mapa']
+    sala = [fila[x * PANT_ANCHO:(x + 1) * PANT_ANCHO] for fila in m[y * PANT_ALTO:(y + 1) * PANT_ALTO]]
+    for a in nv['apariciones']:
+        if a['f'] // PANT_ALTO != y or a['c'] // PANT_ANCHO != x: continue
+        en = p['enemigos'][a['tipo']]
+        w, h = graficos.TAMANOS[en['tamano']]
+        f, c = a['f'] % PANT_ALTO, a['c'] % PANT_ANCHO
+        col = min(c * 2, (192 - w) // 8)
+        yy = min(f * 16, 160 - h)
+        if plataformas(p) and en['comportamiento'] in ('patrulla', 'quieto', 'personaje'):
+            yy = _apoyar(p, sala, f, c, h, yy)
+        d += (0).to_bytes(2, 'little') + col.to_bytes(2, 'little') + bytes([yy, a['tipo']])
+    return bytes(d) + b'\xff\xff'
+
 def _apoyar(p, mapa, f, c, h, y):
     """Altura a la que un enemigo de alto h queda de pie sobre el primer suelo o plataforma
     desde la fila f hacia abajo, en la columna c."""
@@ -936,7 +1382,7 @@ def _codigo_comportamiento(p, en):
     if c == 'quieto': return 0, 0
     if c == 'patrulla':
         if plataformas(p): return 4, 2                  # camina sobre el suelo
-        return 1, (4 if horizontal(p) else 2)
+        return 1, (4 if horizontal(p) else 2)       # (en los modos 2D, en horizontal)
     if c == 'rebota': return 1, d
     if c == 'persigue': return 2, 0
     if c == 'personaje': return 5, 0                # quieto, se habla con él
@@ -1102,6 +1548,8 @@ def contenido_fijo(p, segmentos=None):
         segmentos += [(1, 0xC000, 6912, 'Presentación'), (1, 0xC000 + 6912, 6912, 'Marco'),
                       (4, 0xC000, len(sprites), 'Sprites'), (7, 0xC000, BANCO7_LIBRE - 0xC000, 'Pantalla oculta')]
         if banco7: segmentos.append((7, BANCO7_LIBRE, len(banco7), 'Sprites compilados'))
+        if libre(p): segmentos.append((7, COPIAS_LIBRE[0], COPIAS_LIBRE[1] - COPIAS_LIBRE[0], 'Búferes del scroll libre'))
+    if libre(p): return {1: (0xC000, titulo + marco), 4: (0xC000, sprites), 7: (COPIAS_LIBRE[1], b'')}
     return {1: (0xC000, titulo + marco), 4: (0xC000, sprites), 7: (BANCO7_LIBRE, banco7)}
 
 def repartir_bancos(p, fijos=None, segmentos=None):
@@ -1111,6 +1559,8 @@ def repartir_bancos(p, fijos=None, segmentos=None):
     (banco, dirección, tamaño, qué) para el mapa de memoria."""
     if fijos is None: fijos = contenido_fijo(p, segmentos)
     pa = p['partida']
+    global _ESPANOL
+    _ESPANOL = tipo_fuente(p) == 'espanola' or (tipo_fuente(p) == 'propia' and bool(pa.get('fuente_con_tildes')))
     instr = datos_textos(p.get('textos', []))
     menu = datos_textos(pa['menu'])
     ct = pa['controles']
@@ -1124,8 +1574,9 @@ def repartir_bancos(p, fijos=None, segmentos=None):
     contenido3 = bytearray(CONF); dirs = {}
     for clave, datos in [('instr', instr), ('menu', menu)] + list(cadenas.items()):
         dirs[clave] = 0xC000 + len(contenido3); contenido3 += datos
-    if pa.get('fuente'):
-        dirs['fuente'] = 0xC000 + len(contenido3); contenido3 += bytes(pa['fuente'])
+    fuente = fuente_efectiva(p)
+    if fuente:
+        dirs['fuente'] = 0xC000 + len(contenido3); contenido3 += fuente
     if modo_bloques(p):
         pares = pares_proyecto(p)
         bloq, cols, compilados, largo_v, delta = bloques_memoria(p, pares)
@@ -1148,7 +1599,7 @@ def repartir_bancos(p, fijos=None, segmentos=None):
     if segmentos is not None:
         segmentos.append((3, 0xC000, CONF, 'Configuración'))
         segmentos.append((3, 0xC000 + CONF, dirs.get('pares', 0xC000 + len(contenido3)) - 0xC000 - CONF,
-                          'Textos y mensajes' + (' y fuente' if pa.get('fuente') else '')))
+                          'Textos y mensajes' + (' y fuente' if fuente else '')))
         if modo_bloques(p):
             segmentos.append((3, dirs['pares'], len(contenido3) - (dirs['pares'] - 0xC000), 'Bloques del scroll'))
         if hay_musica: segmentos.append((6, 0xC000, len(PT3PLAYER), 'Reproductor PT3'))
@@ -1162,27 +1613,44 @@ def repartir_bancos(p, fijos=None, segmentos=None):
     bancos = {0: [0xC000, bytearray()], 6: [0xC000, banco6], 3: [0xC000, contenido3]}
     for b, (ini, datos) in fijos.items():
         bancos[b] = [ini, bytearray(datos)]
-    ubicacion, comunes = [], {b: {} for b in BANCOS_FASES}
-    for n in range(len(p['niveles'])):
-        for b in BANCOS_FASES:
-            ini, contenido = bancos[b]
-            base = ini + len(contenido)
-            if base >= 0x10000: continue
-            prueba = dict(comunes[b])
-            try:
-                d = datos_nivel(p, n, base, prueba)
-            except ValueError:
-                continue
-            if base + len(d) <= 0x10000:
-                contenido += d; comunes[b] = prueba; ubicacion.append((b, base))
-                if segmentos is not None: segmentos.append((b, base, len(d), f'Fase {n + 1}'))
-                break
-        else:
-            libre = sum(0x10000 - ini - len(c) for ini, c in bancos.values())
-            raise ValueError(f'No cabe {p["niveles"][n]["nombre"]}: las fases ocupan demasiado (quedan unos '
-                             f'{libre // 1024} KB libres repartidos entre los bancos y esta fase necesita '
-                             f'{len(datos_nivel(p, n)) // 1024 + 1} KB seguidos). Acorta mapas, quita tiles o '
+    # las fases, en el primer banco en el que quepan; si así no caben todas, de la más grande a la
+    # más pequeña y cada una en el banco en el que quede menos hueco
+    tam = {}
+    def colocar_fases(orden, mejor):
+        bk = {b: [ini, bytearray(c)] for b, (ini, c) in bancos.items()}
+        ubic, comunes, segs = {}, {b: {} for b in BANCOS_FASES}, []
+        for n in orden:
+            opciones = []
+            for b in BANCOS_FASES:
+                ini, contenido = bk[b]
+                base = ini + len(contenido)
+                if base >= 0x10000: continue
+                prueba = dict(comunes[b])
+                try: d = datos_nivel(p, n, base, prueba)
+                except ValueError: continue
+                if base + len(d) <= 0x10000:
+                    opciones.append((0x10000 - base - len(d), b, base, d, prueba))
+                    if not mejor: break
+            if not opciones: return None, n, bk
+            _, b, base, d, prueba = min(opciones, key=lambda o: o[0]) if mejor else opciones[0]
+            bk[b][1] += d; comunes[b] = prueba; ubic[n] = (b, base)
+            segs.append((b, base, len(d), f'Fase {n + 1}'))
+        return (bk, ubic, segs), None, bk
+    res, fallo, bk = colocar_fases(range(len(p['niveles'])), False)
+    if res is None:
+        for n in range(len(p['niveles'])): tam[n] = len(datos_nivel(p, n))
+        res2, _, _ = colocar_fases(sorted(tam, key=lambda n: -tam[n]), True)
+        if res2 is None:
+            libre_b = sum(0x10000 - ini - len(c) for ini, c in bk.values())
+            raise ValueError(f'No cabe {p["niveles"][fallo]["nombre"]}: las fases ocupan demasiado (quedan unos '
+                             f'{libre_b // 1024} KB libres repartidos entre los bancos y esta fase necesita '
+                             f'{tam[fallo] // 1024 + 1} KB seguidos). Acorta mapas, quita tiles o '
                              'usa música más corta.')
+        res = res2
+    bk, ubic, segs = res
+    for b in bancos: bancos[b] = bk[b]
+    ubicacion = [ubic[n] for n in range(len(p['niveles']))]
+    if segmentos is not None: segmentos += sorted(segs, key=lambda s_: int(s_[3].split()[1]))
     conf = bytearray(CONF)
     conf[0], conf[1], conf[2], conf[3] = pa['vidas'], pa['energia'], 1 if pa['kempston'] else 0, len(p['niveles'])
     conf[4:6] = dirs['instr'].to_bytes(2, 'little'); conf[6:8] = dirs['menu'].to_bytes(2, 'little')
@@ -1214,7 +1682,6 @@ def repartir_bancos(p, fijos=None, segmentos=None):
         conf[192] = 1 if compilados else 0
         conf[228] = largo_v if compilados else 0
         conf[243] = delta
-        conf[244] = 1 if color_sprites(p) else 0
         conf[245] = parejas_sin_pixeles(p, pares)
         conf[246] = 1 if any(c[0] != c[2] or c[1] != c[3] for c in
                              (_color_par(p, q) for q in representantes(p, pares) if q)) else 0
@@ -1252,17 +1719,34 @@ def repartir_bancos(p, fijos=None, segmentos=None):
     pat = (list(la.get('patron') or [0xFF]) + [0xFF, 0xFF, 0xFF])[:3]
     conf[282:285] = bytes(x & 0xFF for x in pat)
     conf[285] = 1 if la.get('animar', True) else 0
+    conf[286] = atr_libre(p)
+    conf[244] = 1 if color_sprites(p) else 0
     bancos[3][1][0:CONF] = conf
     return {b: (ini, bytes(d)) for b, (ini, d) in bancos.items() if d}
 
+def atr_libre(p):
+    """Color del área en el scroll libre (dos colores: tinta y papel para todo el fondo)."""
+    c = p['scroll'].get('colores', {'tinta': 7, 'papel': 0, 'brillo': 0})
+    return (0x40 if c.get('brillo') else 0) | (c.get('papel', 0) & 7) << 3 | (c.get('tinta', 7) & 7)
+
 def variante_motor(p):
     """Cada juego lleva solo la variante del motor de su tipo de scroll: V vertical, H horizontal o
-    plataformas de 8 en 8, B horizontal o plataformas fino (bloques)."""
+    plataformas de 8 en 8, B horizontal o plataformas fino (bloques), D pantalla a pantalla y C scroll
+    libre en 8 direcciones."""
+    if pantallas(p): return 'D'
+    if libre(p): return 'C'
     if not horizontal(p): return 'V'
     return 'B' if modo_bloques(p) else 'H'
 
 def motor_de(p):
     return MOTORES[variante_motor(p)]
+
+def aparte(p):
+    """(dirección, bytes) del trozo del motor que va fuera de su sitio: en el scroll libre, siempre
+    (0x8000); en el horizontal fino, solo si hay tiles de profundidad (va tras los bloques). (0, b'') si no."""
+    v = variante_motor(p)
+    if v in APARTES and (v == 'C' or hay_profundidad(p)): return APARTES[v]
+    return 0, b''
 
 def generar_tap(p, optimizar=None):
     """Cinta .tap del proyecto. Con optimizar (por defecto, lo que diga el proyecto, que es sí), antes
@@ -1272,13 +1756,15 @@ def generar_tap(p, optimizar=None):
         raise ValueError('\n'.join(errores))
     if optimizar is None: optimizar = p.get('optimizar', True)
     if optimizar: p, _ = depurar(p)
+    p = expandir_t8(p)
     nombre = p.get('nombre') or 'JUEGO'
     carga = p.get('pantalla_carga') or pantalla_vacia()
     motor = motor_de(p)
     if len(motor) > MAX_MOTOR:
         raise ValueError('El motor no cabe en memoria')
     bancos = repartir_bancos(p)
-    bloques = [(0, DIR_MOTOR, motor)] + [(b, ini, d) for b, (ini, d) in sorted(bancos.items())]
+    bloques = [(0, DIR_MOTOR, motor)] + [(0, ini, d) for ini, d in [aparte(p)] if d]
+    bloques += [(b, ini, d) for b, (ini, d) in sorted(bancos.items())]
     tabla = bytearray([len(bloques)])
     for banco, dirc, datos in bloques:
         tabla += bytes([banco]) + dirc.to_bytes(2, 'little') + len(datos).to_bytes(2, 'little')
@@ -1296,7 +1782,10 @@ def mapa_memoria(p, optimizar=None):
     if optimizar is None: optimizar = p.get('optimizar', True)
     informe = None
     if optimizar: p, informe = depurar(p)
+    p = expandir_t8(p)
     seg = [(2, DIR_MOTOR, len(motor_de(p)), f'Motor {variante_motor(p)}')]
+    ini, d = aparte(p)
+    if d: seg.append((2 if ini >= 0x8000 else 5, ini, len(d), 'Motor: profundidad'))
     repartir_bancos(p, segmentos=seg)
     return seg, informe
 
@@ -1320,6 +1809,7 @@ def depurar(p):
     usados = {0}
     for nv in q['niveles']:
         for fila in nv['mapa']: usados.update(fila)
+        if libre(q): usados.add(nv.get('relleno', 0))
     pendientes = list(usados)
     while pendientes:
         t = q['tiles'][pendientes.pop()] if pendientes[-1] < len(q['tiles']) else None
@@ -1334,6 +1824,7 @@ def depurar(p):
             if 'tras' in t: t['tras'] = nuevo.get(t['tras'], 0)
         for nv in q['niveles']:
             nv['mapa'] = [[nuevo[v] for v in fila] for fila in nv['mapa']]
+            if 'relleno' in nv: nv['relleno'] = nuevo.get(nv['relleno'], 0)
     # --- tipos de enemigo
     usados = {a['tipo'] for nv in q['niveles'] for a in nv['apariciones']}
     usados |= {r.get('personaje') for r in estrategia(q)['reglas'] if r.get('cuando') == 'personaje'}

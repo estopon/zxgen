@@ -13,6 +13,36 @@ from editor_sprites import EditorSprites
 
 CONFIG = os.path.join(os.path.expanduser("~"), ".zxgen_config.json")
 PANTALLAS = ("pantalla_carga", "pantalla_titulo", "pantalla_marco")
+AQUI = os.path.dirname(os.path.abspath(__file__))
+# juegos de ejemplo del menú Archivo → Ejemplos: (archivo .json, descripción), por tipo de juego
+EJEMPLOS = [
+    ('Vertical', [('patrulla_vertical', 'PATRULLA VERTICAL (el más sencillo)'),
+                  ('comando_vertical', 'COMANDO (estilo Commando / Ikari Warriors)'),
+                  ('asalto_vertical', 'ASALTO (vertical, enemigos variados)'),
+                  ('jungla_8x8', 'JUNGLA 8x8 (tiles de 8x8 y de profundidad)')]),
+    ('Horizontal', [('patrulla_horizontal', 'PATRULLA HORIZONTAL (de 8 en 8)'),
+                    ('nebulosa_horizontal', 'NEBULOSA (naves, scroll fino automático)'),
+                    ('estrella_naves', 'ESTRELLA (naves, scroll fino)'),
+                    ('punos_beat_em_up', 'PUÑOS (beat\'em up con golpe)')]),
+    ('Plataformas', [('patrulla_plataformas', 'PATRULLA PLATAFORMAS (de 8 en 8)'),
+                     ('saltamontes_plataformas', 'SALTAMONTES (scroll fino)'),
+                     ('templo_plataformas', 'TEMPLO (scroll con retroceso)'),
+                     ('mezcla_zx', 'MEZCLA ZX (modo mezcla, estilo SMB)'),
+                     ('terra_zx', 'TERRA ZX (8 fases, puertas y personajes)')]),
+    ('Pantalla a pantalla', [('castillo_zx', 'CASTILLO ZX (salas con gravedad)')]),
+    ('Libre en 8 direcciones', [('selva_zx', 'SELVA ZX (cenital, dos colores)'),
+                                ('aldea_zx', 'ALDEA ZX (tinta propia, vallas y casas en las que se entra)')]),
+]
+
+def carpetas_ejemplos():
+    """Carpetas donde pueden estar los .json de ejemplo (la del paquete y la de zxgen)."""
+    return [d for d in (os.path.join(AQUI, '..', 'ejemplos'), os.path.join(AQUI, 'ejemplos')) if os.path.isdir(d)]
+
+def ruta_ejemplo(nombre):
+    for d in carpetas_ejemplos():
+        r = os.path.join(d, nombre + '.json')
+        if os.path.isfile(r): return r
+    return None
 
 RITMOS = {'Automática (25 fps constantes)': None, '50 fps (escenas despejadas y pocos sprites)': 1,
           '25 fps': 2, '16,7 fps (escenas muy cargadas)': 3}
@@ -74,8 +104,20 @@ class Aplicacion(tk.Tk):
         a.add_command(label='Nuevo', command=self.nuevo, accelerator='Ctrl+N')
         a.add_command(label='Abrir…', command=self.abrir, accelerator='Ctrl+O')
         ej = tk.Menu(a, tearoff=0)
-        ej.add_command(label='TERRA ZX (plataformas, 8 fases, puertas y personajes)', command=self.ejemplo_terra)
-        ej.add_command(label='MEZCLA ZX (modo mezcla, estilo SMB)', command=self.ejemplo_mezcla)
+        conocidos = set()
+        for grupo, lista in EJEMPLOS:
+            sub = tk.Menu(ej, tearoff=0)
+            for nombre, texto in lista:
+                conocidos.add(nombre)
+                sub.add_command(label=texto, command=lambda n=nombre: self.abrir_ejemplo(n),
+                                state='normal' if ruta_ejemplo(nombre) else 'disabled')
+            ej.add_cascade(label=grupo, menu=sub)
+        otros = sorted({f[:-5] for d in carpetas_ejemplos() for f in os.listdir(d)
+                        if f.endswith('.json') and f[:-5] not in conocidos and f != 'longitudes.json'})
+        if otros:
+            sub = tk.Menu(ej, tearoff=0)
+            for n in otros: sub.add_command(label=n, command=lambda n=n: self.abrir_ejemplo(n))
+            ej.add_cascade(label='Otros', menu=sub)
         a.add_cascade(label='Ejemplos', menu=ej)
         a.add_separator()
         a.add_command(label='Guardar', command=self.guardar, accelerator='Ctrl+S')
@@ -104,6 +146,13 @@ class Aplicacion(tk.Tk):
         if messagebox.askyesno('Nuevo', '¿Descartar el proyecto actual?'):
             self.proyecto = juego.proyecto_nuevo(); self.ruta_proyecto = None; self.nivel_sel = 0; self.refrescar()
 
+    def abrir_ejemplo(self, nombre):
+        ruta = ruta_ejemplo(nombre)
+        if not ruta:
+            messagebox.showerror('Ejemplo', f'No encuentro {nombre}.json en la carpeta «ejemplos».'); return
+        if messagebox.askyesno('Ejemplo', f'¿Descartar el proyecto actual y abrir el ejemplo {nombre}?'):
+            self.abrir(ruta, como_ejemplo=True)
+
     def ejemplo_mezcla(self):
         if messagebox.askyesno('Ejemplo', '¿Descartar el proyecto actual y abrir el ejemplo del modo mezcla?'):
             import ejemplo
@@ -120,8 +169,9 @@ class Aplicacion(tk.Tk):
                 self.config(cursor='')
             self.ruta_proyecto = None; self.nivel_sel = 0; self.refrescar()
 
-    def abrir(self):
-        ruta = filedialog.askopenfilename(filetypes=[('Proyecto', '*.json')])
+    def abrir(self, ruta=None, como_ejemplo=False):
+        if ruta is None:
+            ruta = filedialog.askopenfilename(filetypes=[('Proyecto', '*.json')])
         if not ruta: return
         try:
             with open(ruta, encoding='utf-8') as f: d = json.load(f)
@@ -133,8 +183,9 @@ class Aplicacion(tk.Tk):
             for k in ('menu', 'juego'):
                 if mus.get(k): mus[k] = bytes.fromhex(mus[k])
             p = juego.proyecto_nuevo(); p.update(d); self.nivel_sel = 0
-            self.proyecto = p; self.ruta_proyecto = ruta; self.refrescar()
-            self.estado.set(f'Abierto: {ruta}')
+            self.proyecto = p; self.ruta_proyecto = None if como_ejemplo else ruta; self.refrescar()
+            self.estado.set(f'Ejemplo abierto (Guardar como… para guardarlo aparte): {os.path.basename(ruta)}'
+                            if como_ejemplo else f'Abierto: {ruta}')
         except Exception as e:
             messagebox.showerror('Error', f'No se pudo abrir:\n{e}')
 
@@ -204,6 +255,22 @@ class Aplicacion(tk.Tk):
                         command=self._cambiar_direccion).pack(anchor='w')
         ttk.Radiobutton(d, text='Plataformas: horizontal con gravedad y saltos', value='plataformas',
                         variable=self.v_dir, command=self._cambiar_direccion).pack(anchor='w')
+        ttk.Radiobutton(d, text='Pantalla a pantalla (sin scroll): mapa en rejilla de pantallas', value='pantallas',
+                        variable=self.v_dir, command=self._cambiar_direccion).pack(anchor='w')
+        ttk.Radiobutton(d, text='Libre en 8 direcciones, píxel a píxel (fondo de dos colores)', value='libre',
+                        variable=self.v_dir, command=self._cambiar_direccion).pack(anchor='w')
+        self.f_2d = ttk.Frame(d); self.f_2d.pack(anchor='w', padx=(20, 0))
+        self.v_grav = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.f_2d, text='Con gravedad y saltos (plataformas)', variable=self.v_grav,
+                        command=self._scroll_cambiado).pack(anchor='w')
+        self.f_col2 = ttk.Frame(self.f_2d); self.f_col2.pack(anchor='w')
+        ttk.Label(self.f_col2, text='Colores del fondo: tinta').pack(side='left')
+        self.v_ctinta = tk.StringVar(); self.v_cpapel = tk.StringVar(); self.v_cbrillo = tk.BooleanVar()
+        for txt, var in (('', self.v_ctinta), ('papel', self.v_cpapel)):
+            if txt: ttk.Label(self.f_col2, text=txt).pack(side='left', padx=(6, 0))
+            cb = ttk.Combobox(self.f_col2, values=COLORES, textvariable=var, state='readonly', width=10)
+            cb.pack(side='left', padx=2); cb.bind('<<ComboboxSelected>>', lambda e: self._scroll_cambiado())
+        ttk.Checkbutton(self.f_col2, text='brillo', variable=self.v_cbrillo, command=self._scroll_cambiado).pack(side='left', padx=4)
         pf = ttk.Frame(d); pf.pack(anchor='w', pady=(6, 0))
         ttk.Label(pf, text='Paso del scroll:').pack(side='left')
         self.v_paso = tk.StringVar(value='8')
@@ -215,6 +282,9 @@ class Aplicacion(tk.Tk):
         self.v_ritmo = tk.StringVar()
         self.c_ritmo = ttk.Combobox(cf, values=list(RITMOS), textvariable=self.v_ritmo, state='readonly', width=34)
         self.c_ritmo.pack(side='left', padx=4); self.c_ritmo.bind('<<ComboboxSelected>>', lambda e: self._scroll_cambiado())
+        self.v_t8 = tk.BooleanVar(value=False)
+        ttk.Checkbutton(d, text='Tiles de 8×8 (el mapa se pinta carácter a carácter)', variable=self.v_t8,
+                        command=self._cambiar_t8).pack(anchor='w', pady=(4, 0))
         self.v_compilar = tk.BooleanVar(value=True)
         ttk.Checkbutton(d, text='Compilar sprites (código Z80 en el banco 7; solo con scroll horizontal fino)',
                         variable=self.v_compilar, command=self._scroll_cambiado).pack(anchor='w', pady=(4, 0))
@@ -223,7 +293,7 @@ class Aplicacion(tk.Tk):
         self.v_mezcla = tk.BooleanVar(value=False); self.v_colspr = tk.BooleanVar(value=False)
         ttk.Checkbutton(smb, text='Modo mezcla: dos pantallas alternadas a 50 Hz (tono medio en los tiles)',
                         variable=self.v_mezcla, command=self._scroll_cambiado).pack(anchor='w')
-        ttk.Checkbutton(smb, text='Color propio de los personajes (pintan sus casillas de su color)',
+        ttk.Checkbutton(smb, text='Color propio de los personajes (pintan sus casillas de su tinta; también en el scroll libre)',
                         variable=self.v_colspr, command=self._scroll_cambiado).pack(anchor='w')
         self.l_smb = ttk.Label(smb, style='Ayuda.TLabel', wraplength=420, justify='left')
         self.l_smb.pack(anchor='w')
@@ -234,8 +304,9 @@ class Aplicacion(tk.Tk):
                         variable=self.v_modo, command=self._scroll_cambiado).grid(row=0, column=0, columnspan=3, sticky='w')
         self.c_retro = ttk.Checkbutton(m, text='Permitir retroceso', variable=self.v_retro, command=self._scroll_cambiado)
         self.c_retro.grid(row=1, column=0, columnspan=3, sticky='w', padx=(20, 0))
-        ttk.Radiobutton(m, text='Automático (avanza solo a velocidad fija)', value='auto',
-                        variable=self.v_modo, command=self._scroll_cambiado).grid(row=2, column=0, columnspan=3, sticky='w', pady=(8, 0))
+        self.r_auto = ttk.Radiobutton(m, text='Automático (avanza solo a velocidad fija)', value='auto',
+                                      variable=self.v_modo, command=self._scroll_cambiado)
+        self.r_auto.grid(row=2, column=0, columnspan=3, sticky='w', pady=(8, 0))
         ttk.Label(m, text='Un paso cada').grid(row=3, column=0, sticky='w', padx=(20, 0))
         self.s_vauto = ttk.Spinbox(m, from_=1, to=50, textvariable=self.v_vauto, width=4, command=self._scroll_cambiado)
         self.s_vauto.grid(row=3, column=1, padx=4)
@@ -247,7 +318,12 @@ class Aplicacion(tk.Tk):
         ttk.Label(u, text='Distancia al borde de retroceso:').grid(row=1, column=0, sticky='w')
         self.s_umbr = ttk.Spinbox(u, from_=0, to=184, textvariable=self.v_umbr, width=5, command=self._scroll_cambiado)
         self.s_umbr.grid(row=1, column=1, padx=4)
-        for w in (self.s_vauto, self.s_umb, self.s_umbr):
+        self.l_umbv = ttk.Label(u, text='Margen vertical (scroll libre):'); self.l_umbv.grid(row=2, column=0, sticky='w')
+        self.v_umbv = tk.IntVar()
+        self.s_umbv = ttk.Spinbox(u, from_=0, to=76, textvariable=self.v_umbv, width=5, command=self._scroll_cambiado)
+        self.s_umbv.grid(row=2, column=1, padx=4)
+        self.l_umb0 = u.grid_slaves(row=0, column=0)[0]
+        for w in (self.s_vauto, self.s_umb, self.s_umbr, self.s_umbv):
             w.bind('<FocusOut>', lambda e: self._scroll_cambiado()); w.bind('<Return>', lambda e: self._scroll_cambiado())
         self.f_fisica = ttk.LabelFrame(izq, text='Salto (modo plataformas)', padding=8); self.f_fisica.pack(fill='x', pady=(8, 0))
         self.v_alt = tk.IntVar(); self.v_sub = tk.IntVar(); self.v_cmax = tk.IntVar()
@@ -274,9 +350,12 @@ class Aplicacion(tk.Tk):
         sc = self.proyecto['scroll']
         self.v_dir.set(sc['direccion']); self.v_modo.set(sc['modo']); self.v_retro.set(sc['retroceso'])
         self.v_vauto.set(sc['vel_auto']); self.v_umb.set(sc['umbral']); self.v_umbr.set(sc['umbral_ret'])
+        self.v_umbv.set(sc.get('umbral_v', 48)); self.v_grav.set(sc.get('gravedad', False))
+        col = sc.get('colores', {'tinta': 7, 'papel': 0, 'brillo': 0})
+        self.v_ctinta.set(COLORES[col['tinta']]); self.v_cpapel.set(COLORES[col['papel']]); self.v_cbrillo.set(bool(col['brillo']))
         fi = sc['fisica']; self.v_alt.set(fi['altura']); self.v_sub.set(fi['subida']); self.v_cmax.set(fi['caida_max'])
         self.v_paso.set(str(sc.get('paso', 8)))
-        self.v_compilar.set(sc.get('compilar_sprites', True))
+        self.v_compilar.set(sc.get('compilar_sprites', True)); self.v_t8.set(bool(self.proyecto.get('tiles8')))
         self.v_mezcla.set(sc.get('mezcla', False)); self.v_colspr.set(sc.get('color_sprites', False))
         self.v_ritmo.set([k for k, v in RITMOS.items() if v == sc.get('ritmo')][0])
         self._dibujar_esquema()
@@ -284,7 +363,12 @@ class Aplicacion(tk.Tk):
     def _scroll_cambiado(self, marcar=True):
         sc = self.proyecto['scroll']
         sc['modo'] = self.v_modo.get(); sc['retroceso'] = bool(self.v_retro.get())
-        for clave, v in (('vel_auto', self.v_vauto), ('umbral', self.v_umb), ('umbral_ret', self.v_umbr)):
+        sc['gravedad'] = bool(self.v_grav.get())
+        try: sc['colores'] = {'tinta': int(self.v_ctinta.get()[0]), 'papel': int(self.v_cpapel.get()[0]),
+                              'brillo': 1 if self.v_cbrillo.get() else 0}
+        except (ValueError, IndexError): pass
+        for clave, v in (('vel_auto', self.v_vauto), ('umbral', self.v_umb), ('umbral_ret', self.v_umbr),
+                         ('umbral_v', self.v_umbv)):
             try: sc[clave] = int(v.get())
             except (tk.TclError, ValueError): pass
         sc['paso'] = int(self.v_paso.get() or 8)
@@ -297,10 +381,52 @@ class Aplicacion(tk.Tk):
         if marcar: self.marcar_cambio('scroll')
         self._dibujar_esquema()
 
+    def _cambiar_t8(self):
+        p = self.proyecto; quiere = bool(self.v_t8.get())
+        if quiere == bool(p.get('tiles8')): return
+        if quiere:
+            if not messagebox.askyesno('Tiles de 8×8',
+                                       'Cada tile se parte en sus cuatro caracteres de 8×8 (los repetidos se juntan) y '
+                                       'el mapa pasa a tener el doble de filas y de columnas. Las propiedades de cada tile '
+                                       'pasan a sus cuatro caracteres. No se pierde nada. ¿Seguir?'):
+                self.v_t8.set(False); return
+            try: juego.a_tiles8(p)
+            except ValueError as e:
+                messagebox.showerror('Tiles de 8×8', str(e)); self.v_t8.set(False); return
+        else:
+            if not messagebox.askyesno('Tiles de 16×16',
+                                       'Cada grupo de 2×2 caracteres usado en los mapas pasa a ser un tile de 16×16, con '
+                                       'las propiedades juntadas (sólido si alguno de sus caracteres lo es...). Los '
+                                       'caracteres que no se usan se pierden. ¿Seguir?'):
+                self.v_t8.set(True); return
+            juego.de_tiles8(p)
+        self.marcar_cambio('tiles'); self.refrescar()
+
     def _cambiar_direccion(self):
         nueva = self.v_dir.get(); sc = self.proyecto['scroll']
         if nueva == sc['direccion']: return
-        mismo_mapa = {nueva, sc['direccion']} == {'horizontal', 'plataformas'}
+        mismo_mapa = {nueva, sc['direccion']} in ({'horizontal', 'plataformas'}, {'pantallas', 'libre'})
+        dos_d = ('pantallas', 'libre')
+        if nueva in dos_d and sc['direccion'] not in dos_d:
+            if not messagebox.askyesno('Cambiar a mapa en rejilla',
+                                       'Cada fase pasa a ser una rejilla de pantallas de 12 x 10 tiles: el mapa horizontal '
+                                       'se corta en pantallas de izquierda a derecha y el vertical, de abajo arriba. '
+                                       'No se pierde nada. ¿Seguir?'):
+                self.v_dir.set(sc['direccion']); return
+            for nv in self.proyecto['niveles']:
+                juego.a_rejilla(nv, juego.horizontal(self.proyecto), juego.factor(self.proyecto))
+            sc['direccion'] = nueva; sc['modo'] = 'sigue'
+            if sc['direccion'] == 'libre' or nueva == 'libre': sc['umbral'] = min(sc['umbral'], 72)
+            self.marcar_cambio('dirección'); self.refrescar(); return
+        if sc['direccion'] in dos_d and nueva not in dos_d:
+            if not messagebox.askyesno('Cambiar a scroll en una dirección',
+                                       'De cada rejilla solo se queda la primera fila de pantallas (horizontal) o la '
+                                       'primera columna (vertical); lo demás se pierde. ¿Seguir?'):
+                self.v_dir.set(sc['direccion']); return
+            for nv in self.proyecto['niveles']:
+                juego.de_rejilla(nv, nueva != 'vertical', juego.factor(self.proyecto))
+            sc['direccion'] = nueva
+            self.marcar_cambio('dirección'); self.refrescar(); return
         if mismo_mapa:
             sc['direccion'] = nueva
             self.marcar_cambio('dirección'); self.refrescar(); return
@@ -311,8 +437,9 @@ class Aplicacion(tk.Tk):
                                    'del mapa vertical (y sus enemigos) no caben y se pierden. ¿Seguir?'):
             self.v_dir.set(sc['direccion']); return
         for nv in self.proyecto['niveles']:
-            nv['apariciones'] = juego.convertir_apariciones(nv['apariciones'], nv['mapa'], nueva != 'vertical')
-            nv['mapa'] = juego.convertir_mapa(nv['mapa'], nueva != 'vertical')
+            k = juego.factor(self.proyecto)
+            nv['apariciones'] = juego.convertir_apariciones(nv['apariciones'], nv['mapa'], nueva != 'vertical', k)
+            nv['mapa'] = juego.convertir_mapa(nv['mapa'], nueva != 'vertical', k)
         sc['direccion'] = nueva
         j = self.proyecto['jugador']; w, h = graficos.TAMANOS[j['tamano']]
         if nueva != 'vertical': j['x'], j['y'] = 16, (160 - h) // 2
@@ -324,7 +451,16 @@ class Aplicacion(tk.Tk):
         sc = self.proyecto['scroll']; j = self.proyecto['jugador']
         w, h = graficos.TAMANOS[j['tamano']]; E = 2
         hor = sc['direccion'] != 'vertical'
-        plat = sc['direccion'] == 'plataformas'
+        plat = juego.plataformas(self.proyecto)
+        dos_d = juego.multidir(self.proyecto); libre = juego.libre(self.proyecto)
+        for w_ in self.f_2d.winfo_children() + self.f_col2.winfo_children():
+            try: w_.configure(state=('readonly' if isinstance(w_, ttk.Combobox) else 'normal')
+                              if (dos_d and (w_.master is self.f_2d or libre)) else 'disabled')
+            except tk.TclError: pass
+        for w_ in (self.c_paso,):
+            w_.configure(state='disabled' if dos_d else 'readonly')
+        self.s_umbv.configure(state='normal' if libre else 'disabled')
+        self.l_umb0.configure(text='Margen horizontal (scroll libre):' if libre else 'Distancia al borde de avance:')
         for w_ in self.f_fisica.winfo_children():
             try: w_.configure(state='normal' if plat else 'disabled')
             except tk.TclError: pass
@@ -340,17 +476,33 @@ class Aplicacion(tk.Tk):
         self.s_umbr.configure(state='normal' if (not auto and sc['retroceso']) else 'disabled')
         n = max(1, sc['vel_auto'])
         paso = sc.get('paso', 8)
-        if paso == 8:
+        self.r_auto.configure(state='disabled' if dos_d else 'normal')
+        if dos_d:
+            self.c_retro.configure(state='disabled'); self.s_vauto.configure(state='disabled')
+            self.s_umbr.configure(state='disabled')
+            if not libre: self.s_umb.configure(state='disabled')
+        if juego.pantallas(self.proyecto):
+            nota = ('Pantalla a pantalla: al llegar a un borde se pasa a la pantalla de al lado (si existe en la '
+                    'rejilla de la pestaña Mapa). En plataformas, arriba y abajo se pasa saltando y cayendo. Va a '
+                    '25 fps; al cambiar de pantalla, el dibujo de la nueva tarda unas décimas.')
+        elif libre:
+            try: fps = juego.estimacion_fps(self.proyecto)[0]
+            except Exception: fps = 0
+            nota = ('Libre en 8 direcciones: la cámara sigue al jugador cuando se acerca a los márgenes, píxel a píxel '
+                    'en vertical y de 2 en 2 en horizontal (como se mueven los sprites). El fondo es de dos colores '
+                    '(tinta y papel de arriba): los colores de los tiles no se usan, así no hay choque de atributos. '
+                    f'Velocidad estimada: {fps:g} fps.')
+        elif paso == 8:
             nota = 'De 8 en 8: 25 fps, pero el escenario avanza a saltos y el jugador retrocede de golpe al avanzar.'
         elif not hor:
             nota = 'Vertical fino: tan rápido como de 8 en 8; los colores se mueven de 8 en 8.'
         else:
             try:
-                n = len(juego.pares_proyecto(self.proyecto)) if all(len(nv['mapa']) == juego.MAPA_ALTO
-                                                                   for nv in self.proyecto['niveles']) else 0
+                q = juego.expandir_t8(self.proyecto)
+                n = len(juego.pares_proyecto(q)) if all(len(nv['mapa']) == juego.MAPA_ALTO for nv in q['niveles']) else 0
             except Exception:
                 n = 0
-            limite = min(juego.MAX_PARES, juego.MAX_PARES_MEM // (128 // paso))
+            limite = min(juego.MAX_PARES, juego.max_pares_mem(self.proyecto) // (128 // paso))
             comp = 'compilados' if juego.usa_compilados(self.proyecto) else 'de datos'
             nota = (f'Horizontal fino por bloques pre-desplazados ({comp}), al estilo de Cobra o del Mario de '
                     f'Smirnov: solo se dibujan las casillas con contenido, así que un cielo liso (tile sin píxeles) '
@@ -370,8 +522,10 @@ class Aplicacion(tk.Tk):
             if sc['modo'] == 'sigue' and paso > vel:
                 nota += f' Aviso: el paso ({paso}) es mayor que la velocidad del jugador ({vel}): oscilará {paso - vel} px.'
         self.l_paso.configure(text=nota)
-        if (sc.get('mezcla') or sc.get('color_sprites')) and not juego.modo_bloques(self.proyecto):
-            self.l_smb.configure(text='Necesita dirección horizontal o plataformas y paso 1, 2 o 4.', foreground='red')
+        if (sc.get('mezcla') and not juego.modo_bloques(self.proyecto)) or \
+                (sc.get('color_sprites') and not (juego.modo_bloques(self.proyecto) or juego.libre(self.proyecto))):
+            self.l_smb.configure(text='El modo mezcla necesita horizontal o plataformas con paso 1, 2 o 4; el color '
+                                      'propio, eso o el scroll libre.', foreground='red')
         elif sc.get('mezcla'):
             try: coste = juego.coste_fondo(self.proyecto)
             except Exception: coste = 0
@@ -389,9 +543,17 @@ class Aplicacion(tk.Tk):
                                  'la pestaña Personajes. Queda mejor sobre cielo negro.' if sc.get('color_sprites') else '')
         self.c_ritmo.configure(state='disabled' if sc.get('mezcla') else 'readonly')
         self.l_vauto.configure(text=f'fotogramas  (paso de {paso} px: ≈ {paso * 25 / n:.0f} px/s)')
-        flecha = (192 * E - 30, 80 * E, 192 * E - 6, 80 * E) if hor else (96 * E, 30, 96 * E, 6)
-        c.create_line(*flecha, arrow='last', fill='white', width=3)
-        if not auto:
+        if dos_d:
+            for fl in ((192 * E - 30, 80 * E, 192 * E - 6, 80 * E), (30, 80 * E, 6, 80 * E),
+                       (96 * E, 30, 96 * E, 6), (96 * E, 160 * E - 30, 96 * E, 160 * E - 6)):
+                c.create_line(*fl, arrow='last', fill='white', width=3)
+            if libre:
+                u, v = sc['umbral'] * E, sc.get('umbral_v', 48) * E
+                c.create_rectangle(u, v, 192 * E - u, 160 * E - v, outline='red', width=2, dash=(6, 3))
+        else:
+            flecha = (192 * E - 30, 80 * E, 192 * E - 6, 80 * E) if hor else (96 * E, 30, 96 * E, 6)
+            c.create_line(*flecha, arrow='last', fill='white', width=3)
+        if not auto and not dos_d:
             if hor:
                 xu = (192 - sc['umbral']) * E
                 c.create_line(xu, 0, xu, 160 * E, fill='red', width=2, dash=(6, 3))
@@ -565,8 +727,8 @@ class Aplicacion(tk.Tk):
         ttk.Button(f, text='Borrar', command=self.borrar_texto).grid(row=2, column=7)
         ttk.Label(f, text='Instrucciones: pantalla que se abre con la tecla 2 del menú. Menú: textos que se escriben '
                           'sobre la pantalla de presentación (la línea de controles se configura en la pestaña Partida). '
-                          'Las tildes y la ñ se convierten a letras sin acento (la fuente de la ROM no las tiene; '
-                          'en la fase 5 el juego tendrá su propia fuente editable).',
+                          'Con la fuente española (la de serie, pestaña Partida) se pueden escribir á é í ó ú ñ Á É Í Ó Ú Ñ ¿ ¡; '
+                          'con la de la ROM o una propia, las tildes se quitan.',
                   wraplength=820).grid(row=3, column=0, columnspan=8, pady=10, sticky='w')
         f.columnconfigure(4, weight=1)
 
@@ -809,8 +971,14 @@ class Aplicacion(tk.Tk):
         ttk.Checkbutton(ms, variable=var('m_brillo', tk.BooleanVar)).grid(row=3, column=2, sticky='w')
         fu = ttk.LabelFrame(der, text='Fuente', padding=8); fu.pack(fill='x')
         b = ttk.Frame(fu); b.pack(anchor='w')
+        ttk.Button(b, text='Española (de serie)', command=self._fuente_espanola).pack(side='left')
+        ttk.Button(b, text='La de la ROM', command=self._quitar_fuente).pack(side='left', padx=4)
         ttk.Button(b, text='Importar…', command=self._importar_fuente).pack(side='left')
-        ttk.Button(b, text='Usar la de la ROM', command=self._quitar_fuente).pack(side='left', padx=4)
+        ttk.Button(b, text='Exportar…', command=self._exportar_fuente).pack(side='left', padx=4)
+        self.v_ftildes = tk.BooleanVar()
+        self.c_ftildes = ttk.Checkbutton(fu, text='Mi fuente tiene las letras españolas en el sitio de la de serie',
+                                         variable=self.v_ftildes, command=self._ftildes)
+        self.c_ftildes.pack(anchor='w')
         self.l_fuente = ttk.Label(fu, text=''); self.l_fuente.pack(anchor='w', pady=4)
         self.c_fuente = tk.Canvas(fu, width=256 * 2 // 2 * 1, height=48, bg='black', highlightthickness=0)
         self.c_fuente.pack(anchor='w')
@@ -928,15 +1096,36 @@ class Aplicacion(tk.Tk):
             messagebox.showerror('Fuente', f'No se pudo importar la fuente:\n{e}')
 
     def _quitar_fuente(self):
-        self.proyecto['partida']['fuente'] = None; self.marcar_cambio('fuente'); self._dibujar_fuente()
+        pa = self.proyecto['partida']; pa['fuente'] = None; pa['fuente_rom'] = True
+        self.marcar_cambio('fuente'); self._dibujar_fuente()
+
+    def _ftildes(self):
+        self.proyecto['partida']['fuente_con_tildes'] = bool(self.v_ftildes.get()); self.marcar_cambio('fuente')
+
+    def _fuente_espanola(self):
+        pa = self.proyecto['partida']; pa['fuente'] = None; pa['fuente_rom'] = False
+        self.marcar_cambio('fuente'); self._dibujar_fuente()
+
+    def _exportar_fuente(self):
+        f = juego.fuente_efectiva(self.proyecto)
+        if not f:
+            messagebox.showinfo('Fuente', 'La fuente de la ROM no se puede exportar desde aquí.'); return
+        ruta = filedialog.asksaveasfilename(defaultextension='.ch8', filetypes=[('Fuente de 768 bytes', '*.ch8')])
+        if ruta:
+            open(ruta, 'wb').write(f)
 
     def _dibujar_fuente(self):
         c = self.c_fuente; c.delete('all')
-        fuente = self.proyecto['partida'].get('fuente')
+        fuente = juego.fuente_efectiva(self.proyecto)
+        tipo = juego.tipo_fuente(self.proyecto)
+        self.v_ftildes.set(bool(self.proyecto['partida'].get('fuente_con_tildes')))
+        self.c_ftildes.configure(state='normal' if tipo == 'propia' else 'disabled')
         if not fuente:
-            self.l_fuente.configure(text='Se usa la fuente de la ROM del Spectrum.')
+            self.l_fuente.configure(text='Se usa la fuente de la ROM del Spectrum (sin tildes ni ñ: se quitan).')
             c.configure(height=1); return
-        self.l_fuente.configure(text='Fuente propia (caracteres 32 a 127):')
+        self.l_fuente.configure(text='Fuente española de serie: á é í ó ú ñ Á É Í Ó Ú Ñ ¿ ¡ ocupan el sitio de\n'
+                                     '# $ % & @ [ \\ ] ^ _ ` { } ~ (la ü se escribe u).' if tipo == 'espanola' else
+                                'Fuente propia (caracteres 32 a 127; las tildes se quitan):')
         img = pantalla.imagen_fuente(fuente)
         self._foto_fuente = ImageTk.PhotoImage(img.resize((img.width * 2, img.height * 2)))
         c.configure(width=img.width * 2, height=img.height * 2)
