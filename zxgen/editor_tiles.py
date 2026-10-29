@@ -1,4 +1,5 @@
-"""Editor de tiles de 16x16 con un atributo por cuadro de 8x8."""
+"""Editor de tiles de 16x16 con un atributo por cuadro de 8x8 (o de 8x8 con un atributo, si el proyecto
+usa tiles de 8x8). También las líneas Tras y Ante de los tiles de profundidad."""
 import copy
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -16,6 +17,9 @@ CELDA = 20          # tamaño de un píxel en el editor
 MINI = 32           # tamaño de las miniaturas
 POR_FILA = 6
 CUADROS = ['Arriba izquierda', 'Arriba derecha', 'Abajo izquierda', 'Abajo derecha']
+BORDES_TXT = ['Inferior', 'Superior', 'Izquierdo', 'Derecho']
+LADOS = (('cuenta debajo', 'cuenta encima'), ('cuenta a la derecha', 'cuenta a la izquierda'))
+COLOR_LINEA = {'linea_tras': '#ff4040', 'linea_ante': '#40e0ff'}
 
 
 class EditorTiles(ttk.Frame):
@@ -29,6 +33,15 @@ class EditorTiles(ttk.Frame):
     @property
     def tiles(self):
         return self.app.proyecto['tiles']
+
+    @property
+    def n(self):
+        """Lado de los tiles del proyecto: 16 u 8."""
+        return juego.lado_tile(self.app.proyecto)
+
+    @property
+    def celda(self):
+        return CELDA * 16 // self.n
 
     # ---------------- interfaz ----------------
     def _construir(self):
@@ -67,8 +80,9 @@ class EditorTiles(ttk.Frame):
 
         der = ttk.LabelFrame(self, text='Color por cuadro de 8×8', padding=8)
         der.grid(row=1, column=1, sticky='nwe', padx=8, pady=(8, 0))
+        self.f_color = der
         self.v_cuadro = tk.IntVar(value=0)
-        cu = ttk.Frame(der); cu.grid(row=0, column=0, sticky='nw')
+        cu = ttk.Frame(der); cu.grid(row=0, column=0, sticky='nw'); self.f_cuadros = cu
         for i, n in enumerate(CUADROS):
             ttk.Radiobutton(cu, text=n, value=i, variable=self.v_cuadro,
                             command=self._mostrar_atr).grid(row=i // 2, column=i % 2, sticky='w', padx=(0, 6))
@@ -81,7 +95,8 @@ class EditorTiles(ttk.Frame):
         ttk.Checkbutton(co, text='Brillo', variable=self.v_brillo).grid(row=0, column=2, sticky='w')
         bb = ttk.Frame(der); bb.grid(row=2, column=0, sticky='w', pady=(6, 0))
         ttk.Button(bb, text='Aplicar al cuadro', command=self._aplicar_atr).pack(side='left')
-        ttk.Button(bb, text='A los 4', command=lambda: self._aplicar_atr(True)).pack(side='left', padx=4)
+        self.b_a4 = ttk.Button(bb, text='A los 4', command=lambda: self._aplicar_atr(True))
+        self.b_a4.pack(side='left', padx=4)
         ttk.Label(der, style='Ayuda.TLabel', wraplength=330, justify='left', text=(
             'Cada cuadro de 8×8 tiene dos colores (tinta y papel) y un brillo, como en el Spectrum. '
             'Mezcla = un tercer tono entre tinta y papel (solo en modo mezcla; si no, se ve como un damero).'
@@ -135,12 +150,133 @@ class EditorTiles(ttk.Frame):
         for w in (self.w_elem, self.w_llave): w.bind('<<ComboboxSelected>>', lambda ev: self._propiedades())
         self.w_msg = estilo.CampoMensaje(self.f_acc, al_cambiar=self._propiedades)
         self.l_acc = ttk.Label(self.f_acc, style='Ayuda.TLabel', wraplength=380, justify='left')
+        self._construir_profundidad(caja)
         ttk.Label(caja, style='Ayuda.TLabel', justify='left', wraplength=380, text='En la paleta: esquina roja = sólido, azul = detiene disparos, amarilla = plataforma, magenta = mortal; borde naranja = rompible o frágil, verde = objeto.').pack(anchor='w', side='bottom', pady=(6, 0))
+
+    def _construir_profundidad(self, padre):
+        f = ttk.LabelFrame(padre, text='Profundidad', padding=6)
+        f.pack(anchor='w', fill='x', pady=(10, 0))
+        self.v_prof = tk.BooleanVar()
+        ttk.Checkbutton(f, text='Tile de profundidad (tapa a los personajes)', variable=self.v_prof,
+                        command=self._guardar_prof).grid(row=0, column=0, columnspan=7, sticky='w')
+        self.v_lin = {}
+        for k, (clave, nombre) in enumerate((('linea_tras', 'Tras'), ('linea_ante', 'Ante'))):
+            v = {'hay': tk.BooleanVar(), 'borde': tk.StringVar(value=BORDES_TXT[0]), 'pasable': tk.BooleanVar(value=True),
+                 'lado': tk.StringVar(value=LADOS[0][0]), 'p': [tk.StringVar(value='0') for _ in range(4)]}
+            self.v_lin[clave] = v
+            fila = 1 + k * 2
+            ttk.Checkbutton(f, text=f'Línea {nombre}', variable=v['hay'],
+                            command=lambda c=clave: self._activar_linea(c)).grid(row=fila, column=0, sticky='w')
+            tk.Label(f, text='━━', fg=COLOR_LINEA[clave], bg=estilo.FONDO).grid(row=fila, column=1, sticky='w')
+            ttk.Label(f, text='borde').grid(row=fila, column=2, sticky='e')
+            cb = ttk.Combobox(f, values=BORDES_TXT, textvariable=v['borde'], state='readonly', width=9)
+            cb.grid(row=fila, column=3, sticky='w', padx=2)
+            cb.bind('<<ComboboxSelected>>', lambda e, c=clave: self._cambiar_borde(c))
+            v['w_lado'] = ttk.Combobox(f, values=LADOS[0], textvariable=v['lado'], state='readonly', width=15)
+            v['w_lado'].grid(row=fila, column=4, sticky='w', padx=2)
+            v['w_lado'].bind('<<ComboboxSelected>>', lambda e: self._guardar_prof())
+            pf = ttk.Frame(f); pf.grid(row=fila + 1, column=0, columnspan=7, sticky='w', pady=(0, 4))
+            ttk.Label(pf, text='   de (x, y)').pack(side='left')
+            for i in range(4):
+                if i == 2: ttk.Label(pf, text=' a (x, y)').pack(side='left')
+                e = ttk.Spinbox(pf, from_=-16, to=31, textvariable=v['p'][i], width=4, command=self._guardar_prof)
+                e.pack(side='left', padx=1); e.bind('<FocusOut>', lambda ev: self._guardar_prof())
+            ttk.Checkbutton(pf, text='se traspasa', variable=v['pasable'],
+                            command=self._guardar_prof).pack(side='left', padx=(8, 0))
+        self.v_raton = tk.StringVar(value='pixeles')
+        rf = ttk.Frame(f); rf.grid(row=5, column=0, columnspan=7, sticky='w')
+        ttk.Label(rf, text='El ratón dibuja:').pack(side='left')
+        for txt, val in (('píxeles', 'pixeles'), ('línea Tras', 'linea_tras'), ('línea Ante', 'linea_ante')):
+            ttk.Radiobutton(rf, text=txt, value=val, variable=self.v_raton).pack(side='left', padx=2)
+        self._punto = None
+        ttk.Label(f, style='Ayuda.TLabel', wraplength=380, justify='left', text=(
+            'Para dibujar una línea, elige «línea Tras» o «línea Ante» y haz clic en sus dos extremos sobre el '
+            'tile (o escribe los números: pueden salirse del tile, de -16 a 31; entonces se marca en el borde del '
+            'dibujo). El borde es el del personaje que se compara con la línea, en su centro. Las rayitas cortas '
+            'señalan el lado elegido («debajo», «encima», «a la derecha» o «a la izquierda»): si ese borde del '
+            'personaje está en ese lado de la línea Tras, se ve el personaje; si está en ese lado o en la línea '
+            'Ante, se ve el tile; sin líneas, siempre el tile. Una línea que no se traspasa (continua) no la cruza '
+            'ese borde de los personajes.'
+        )).grid(row=6, column=0, columnspan=7, sticky='w', pady=(4, 0))
+
+    def _linea_defecto(self, borde):
+        """Línea de partida para cada borde: en el lado del tile que corresponde."""
+        n = self.n - 1
+        return [[0, n, n, n], [0, 0, n, 0], [0, 0, 0, n], [n, 0, n, n]][borde]
+
+    def _puntos(self, v):
+        res = []
+        for sv in v['p']:
+            try: res.append(max(-16, min(31, int(sv.get()))))
+            except (ValueError, tk.TclError): res.append(0)
+        return res
+
+    def _activar_linea(self, clave):
+        v = self.v_lin[clave]
+        if v['hay'].get():
+            self.v_prof.set(True)            # una línea solo sirve en un tile de profundidad
+            if clave not in self.tiles[self.actual]:
+                for sv, x in zip(v['p'], self._linea_defecto(BORDES_TXT.index(v['borde'].get()))): sv.set(str(x))
+        self._guardar_prof()
+
+    def _cambiar_borde(self, clave):
+        """Al cambiar de borde, la línea se recoloca si era la de partida o si no sirve para ese borde
+        (horizontal para un borde lateral, vertical para el de arriba o el de abajo)."""
+        v = self.v_lin[clave]; t = self.tiles[self.actual]
+        nuevo = BORDES_TXT.index(v['borde'].get())
+        viejo = (t.get(clave) or {}).get('borde', 0)
+        x0, y0, x1, y1 = self._puntos(v)
+        if [x0, y0, x1, y1] == self._linea_defecto(viejo) or not v['hay'].get():
+            pts = self._linea_defecto(nuevo)
+        elif (nuevo >= 2) != (viejo >= 2) and (abs(x1 - x0) >= abs(y1 - y0)) == (nuevo >= 2):
+            pts = [y0, x0, y1, x1]               # se gira (horizontal <-> vertical)
+        else:
+            pts = [x0, y0, x1, y1]
+        for sv, x in zip(v['p'], pts): sv.set(str(x))
+        lados = LADOS[1 if nuevo >= 2 else 0]
+        inv = v['lado'].get() in (LADOS[0][1], LADOS[1][1])
+        v['w_lado'].configure(values=lados); v['lado'].set(lados[1 if inv else 0])
+        if v['hay'].get(): self.v_prof.set(True)
+        self._guardar_prof()
+
+    def _guardar_prof(self):
+        if getattr(self, '_cargando', False) or not self.tiles: return
+        t = self.tiles[self.actual]
+        t['profundidad'] = bool(self.v_prof.get())
+        for clave, v in self.v_lin.items():
+            if not v['hay'].get():
+                t.pop(clave, None); continue
+            t[clave] = {'p': self._puntos(v),
+                        'borde': BORDES_TXT.index(v['borde'].get()) if v['borde'].get() in BORDES_TXT else 0,
+                        'pasable': bool(v['pasable'].get()),
+                        'invertir': v['lado'].get() in (LADOS[0][1], LADOS[1][1])}
+        self._dibujar_tile(); self._dibujar_paleta(); self.app.marcar_cambio('tiles')
+
+    def _mostrar_prof(self):
+        t = self.tiles[self.actual]
+        self._cargando = True
+        self.v_prof.set(bool(t.get('profundidad')))
+        for clave, v in self.v_lin.items():
+            l = t.get(clave)
+            v['hay'].set(bool(l))
+            l = l or {'p': self._linea_defecto(0), 'borde': 0, 'pasable': True}
+            b = l.get('borde', 0) & 3
+            v['borde'].set(BORDES_TXT[b]); v['pasable'].set(bool(l.get('pasable', True)))
+            lados = LADOS[1 if b >= 2 else 0]
+            v['w_lado'].configure(values=lados); v['lado'].set(lados[1 if l.get('invertir') else 0])
+            for sv, x in zip(v['p'], l['p']): sv.set(str(x))
+        self._cargando = False
 
     # ---------------- dibujo ----------------
     def refrescar(self):
         if self.actual >= len(self.tiles):
             self.actual = len(self.tiles) - 1
+        if self.n == 8:
+            self.f_cuadros.grid_remove(); self.b_a4.pack_forget(); self.f_color.configure(text='Color del tile')
+        else:
+            self.f_cuadros.grid()
+            if not self.b_a4.winfo_ismapped(): self.b_a4.pack(side='left', padx=4)
+            self.f_color.configure(text='Color por cuadro de 8×8')
         self._dibujar_paleta()
         self._dibujar_tile()
         self._mostrar_atr()
@@ -149,7 +285,7 @@ class EditorTiles(ttk.Frame):
         c = self.paleta; c.delete('all'); self._fotos = []; self._items = []
         for i, t in enumerate(self.tiles):
             x = (i % POR_FILA) * (MINI + 4) + 2; y = (i // POR_FILA) * (MINI + 4) + 2
-            foto = ImageTk.PhotoImage(graficos.imagen_tile(t, MINI // 16))
+            foto = ImageTk.PhotoImage(graficos.imagen_tile(t, MINI // len(t['pix'])))
             self._fotos.append(foto)
             self._items.append(c.create_image(x, y, image=foto, anchor='nw'))
             if t.get('solido'):
@@ -164,23 +300,59 @@ class EditorTiles(ttk.Frame):
                 c.create_rectangle(x + 2, y + 2, x + MINI - 2, y + MINI - 2, outline='orange', width=2)
             if t.get('objeto'):
                 c.create_rectangle(x + 5, y + 5, x + MINI - 5, y + MINI - 5, outline='#40ff40', width=2)
+            if t.get('profundidad'):
+                c.create_text(x + MINI // 2, y + MINI // 2, text='P', fill='white', font=('TkDefaultFont', 10, 'bold'))
             if i == self.actual:
                 c.create_rectangle(x - 2, y - 2, x + MINI + 1, y + MINI + 1, outline='white', width=2)
         filas = (len(self.tiles) + POR_FILA - 1) // POR_FILA
         c.configure(scrollregion=(0, 0, POR_FILA * (MINI + 4), filas * (MINI + 4) + 4))
-        self.info.configure(text=f'Tile {self.actual} de {len(self.tiles)}  ·  máx. 256')
+        self.info.configure(text=f'Tile {self.actual} de {len(self.tiles)}  ·  máx. 256' +
+                                 ('  ·  de 8×8' if self.n == 8 else ''))
 
     def _dibujar_tile(self):
         c = self.lienzo; c.delete('all')
         t = self.tiles[self.actual]
-        img = graficos.imagen_tile(t, CELDA)
+        n, ce = len(t['pix']), CELDA * 16 // len(t['pix'])
+        img = graficos.imagen_tile(t, ce)
         self._foto_grande = ImageTk.PhotoImage(img)
         c.create_image(0, 0, image=self._foto_grande, anchor='nw')
-        for k in range(17):
+        for k in range(n + 1):
             ancho = 2 if k in (0, 8, 16) else 1
             col = '#888' if ancho == 2 else '#555'
-            c.create_line(k * CELDA, 0, k * CELDA, 16 * CELDA, fill=col, width=ancho)
-            c.create_line(0, k * CELDA, 16 * CELDA, k * CELDA, fill=col, width=ancho)
+            c.create_line(k * ce, 0, k * ce, n * ce, fill=col, width=ancho)
+            c.create_line(0, k * ce, n * ce, k * ce, fill=col, width=ancho)
+        if t.get('profundidad'):                  # líneas Tras y Ante (por el centro de los píxeles)
+            lim = n * ce
+            def cl(v): return max(3, min(lim - 3, v))
+            for clave in ('linea_tras', 'linea_ante'):
+                l = t.get(clave)
+                if not l: continue
+                col = COLOR_LINEA[clave]
+                vals = [v - 256 if v > 127 else v for v in juego.valores_linea(l)][:n]
+                lat = l.get('borde', 0) >= 2
+                signo = -1 if l.get('invertir') else 1          # lado que cuenta como «debajo»
+                pts, fuera = [], False
+                for i, v in enumerate(vals):
+                    a, b = i * ce + ce // 2, v * ce + ce // 2
+                    if not 0 <= v < n: fuera = True
+                    pts += [cl(b), a] if lat else [a, cl(b)]
+                c.create_line(*pts, fill=col, width=3, dash=() if not l.get('pasable', True) else (6, 3))
+                for i in range(0, n, max(1, n // 4)):        # rayitas hacia el lado elegido
+                    a, b = i * ce + ce // 2, cl(vals[i] * ce + ce // 2)
+                    d = signo * ce * 0.6
+                    c.create_line(*((b, a, b + d, a) if lat else (a, b, a, b + d)), fill=col, width=2, arrow='last',
+                                  arrowshape=(5, 6, 3))
+                if fuera:
+                    c.create_text(4, 4 + (14 if clave == 'linea_ante' else 0), anchor='nw', fill=col,
+                                  font=('TkDefaultFont', 9, 'bold'),
+                                  text=f'{"Tras" if clave == "linea_tras" else "Ante"}: fuera del tile')
+                for x, y in ((l['p'][0], l['p'][1]), (l['p'][2], l['p'][3])):
+                    if 0 <= x < n and 0 <= y < n:
+                        c.create_oval(x * ce + ce // 2 - 4, y * ce + ce // 2 - 4, x * ce + ce // 2 + 4,
+                                      y * ce + ce // 2 + 4, outline=col, width=2)
+        if self._punto:
+            x, y = self._punto
+            c.create_oval(x * ce + 2, y * ce + 2, x * ce + ce - 2, y * ce + ce - 2, outline='white', width=2)
 
     def _propiedades(self):
         t = self.tiles[self.actual]
@@ -266,7 +438,9 @@ class EditorTiles(ttk.Frame):
         self.v_accion.set([k for k, v in ACCIONES_TXT.items() if v == t.get('accion', 'puntos')][0])
         self._cargando = False
         self._campos_accion()
-        a = self.tiles[self.actual]['atr'][self.v_cuadro.get()]
+        self._mostrar_prof()
+        atr = self.tiles[self.actual]['atr']
+        a = atr[min(self.v_cuadro.get(), len(atr) - 1)]
         tinta, papel, br = partes_atr(a)
         self.v_tinta.set(COLORES[tinta]); self.v_papel.set(COLORES[papel]); self.v_brillo.set(bool(br))
 
@@ -278,9 +452,18 @@ class EditorTiles(ttk.Frame):
             self.actual = i; self.refrescar()
 
     def _pintar(self, e, valor):
-        x, y = e.x // CELDA, e.y // CELDA
-        if not (0 <= x < 16 and 0 <= y < 16): return
+        x, y = e.x // self.celda, e.y // self.celda
+        if not (0 <= x < self.n and 0 <= y < self.n): return
         t = self.tiles[self.actual]
+        if self.v_raton.get() != 'pixeles':          # extremos de una línea de profundidad
+            if str(e.type) not in ('4', 'ButtonPress'): return      # (al arrastrar, nada)
+            if valor == '.': self._punto = None; self._dibujar_tile(); return   # clic dcho.: cancela
+            clave = self.v_raton.get(); v = self.v_lin[clave]
+            if self._punto is None:
+                self._punto = (x, y); self._dibujar_tile(); return
+            x0, y0 = self._punto; self._punto = None
+            for sv, val in zip(v['p'], (x0, y0, x, y)): sv.set(str(val))
+            v['hay'].set(True); self.v_prof.set(True); self._guardar_prof(); return
         fila = t['pix'][y]
         if fila[x] == valor: return
         t['pix'][y] = fila[:x] + valor + fila[x + 1:]
@@ -290,8 +473,10 @@ class EditorTiles(ttk.Frame):
     def _aplicar_atr(self, todos=False):
         a = atributo(int(self.v_tinta.get()[0]), int(self.v_papel.get()[0]), self.v_brillo.get())
         t = self.tiles[self.actual]
-        for q in (range(4) if todos else [self.v_cuadro.get()]):
-            t['atr'][q] = a
+        if len(t['atr']) == 1: t['atr'][0] = a
+        else:
+            for q in (range(4) if todos else [self.v_cuadro.get()]):
+                t['atr'][q] = a
         self._dibujar_tile(); self._cambio()
 
     def _transformar(self, f):
@@ -300,14 +485,14 @@ class EditorTiles(ttk.Frame):
         self._dibujar_tile(); self._cambio()
 
     def limpiar(self):
-        self._transformar(lambda p: ['.' * 16] * 16)
+        self._transformar(lambda p: ['.' * len(p)] * len(p))
 
     def invertir(self):
         self._transformar(lambda p: [f.translate(str.maketrans('X.', '.X')) for f in p])
 
     def nuevo(self):
         if len(self.tiles) >= 256: return
-        self.tiles.append(graficos.tile_vacio())
+        self.tiles.append(juego.tile8_vacio() if self.n == 8 else graficos.tile_vacio())
         self.actual = len(self.tiles) - 1; self._cambio(); self.refrescar()
 
     def duplicar(self):
@@ -335,10 +520,21 @@ class EditorTiles(ttk.Frame):
                 m[y] = [f(v) for v in fila]
 
     def importar(self):
-        """Lee una imagen con tiles de 16x16 en rejilla y los añade al final."""
+        """Lee una imagen con tiles de 16x16 (o de 8x8) en rejilla y los añade al final."""
         ruta = filedialog.askopenfilename(filetypes=[('Imágenes', '*.png *.gif *.bmp'), ('Todos', '*.*')])
         if not ruta: return
         img = Image.open(ruta).convert('RGB'); px = img.load()
+        if self.n == 8:
+            nuevos = 0
+            for ty in range(img.height // 8):
+                for tx in range(img.width // 8):
+                    if len(self.tiles) >= 256: break
+                    filas, a = pantalla.convertir_celda([px[tx * 8 + x, ty * 8 + y] for y in range(8) for x in range(8)])
+                    t = juego.tile8_vacio(a)
+                    t['pix'] = [''.join('X' if filas[y] & (0x80 >> x) else '.' for x in range(8)) for y in range(8)]
+                    self.tiles.append(t); nuevos += 1
+            self._cambio(); self.refrescar()
+            messagebox.showinfo('Importar', f'{nuevos} tiles de 8×8 añadidos.'); return
         nx, ny = img.width // 16, img.height // 16
         if nx * ny == 0:
             messagebox.showerror('Importar', 'La imagen debe medir al menos 16×16.'); return
@@ -366,6 +562,6 @@ class EditorTiles(ttk.Frame):
             # actualizar solo la miniatura del tile actual
             i = self.actual
             if i < len(self._items):
-                self._fotos[i] = ImageTk.PhotoImage(graficos.imagen_tile(self.tiles[i], MINI // 16))
+                self._fotos[i] = ImageTk.PhotoImage(graficos.imagen_tile(self.tiles[i], MINI // len(self.tiles[i]['pix'])))
                 self.paleta.itemconfigure(self._items[i], image=self._fotos[i])
         self.app.marcar_cambio('tiles')

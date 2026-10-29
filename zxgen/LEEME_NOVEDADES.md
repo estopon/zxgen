@@ -153,3 +153,101 @@ Nueva arma «Láser» con subpestaña propia:
 - Al recibir una bala enemiga, el bucle de colisiones perdía su contador y podía escribir fuera de
   la tabla de sprites. Con sprites grandes dejaba el juego sin enemigos tras perder una vida.
 - El aviso de «los sprites no caben en el banco 4» dice ahora cuántos bytes sobran en total.
+
+# Versión 10: pantalla a pantalla y scroll libre en 8 direcciones
+
+## Dos tipos de scroll nuevos (pestaña Scroll)
+- **Pantalla a pantalla (sin scroll)**: al llegar a un borde se pasa a la pantalla de al lado.
+  - Cenital: por los cuatro bordes.
+  - Con gravedad y saltos: hacia arriba saltando por un hueco del techo y hacia abajo cayendo.
+  - Al entrar en una pantalla salen sus enemigos; al volver, otra vez.
+  - Va a 25 fps. Dibujar la pantalla nueva tarda unas décimas.
+  - Usa la variante D del motor.
+- **Libre en 8 direcciones**: la cámara sigue al jugador cuando sale del recuadro de márgenes.
+  - Se mueve píxel a píxel en vertical y de 2 en 2 en horizontal, como los sprites.
+  - El fondo es de dos colores (tinta, papel y brillo en la pestaña Scroll), así que no hay choque de
+    atributos.
+  - Puede ser cenital o con gravedad y saltos.
+  - Va a unos 16,7 fps constantes.
+  - Usa la variante C del motor: 4 copias del fondo ya desplazadas, y solo se dibuja lo que entra.
+
+## Mapa en rejilla (pestaña Mapa)
+En los dos modos, cada fase es una rejilla de pantallas de 12 x 10 tiles, de 1 x 1 a 16 x 16. No
+tiene por qué ser rectangular: las pantallas se pueden quitar.
+- Con «Qué se edita: Pantallas», un clic elige pantalla y los botones sirven para quitarla o ponerla,
+  empezar aquí, copiar y pegar.
+- En el scroll libre, las pantallas quitadas se ven con el tile de relleno: elige uno sólido.
+- Al cambiar a estos modos, las fases de un scroll de una dirección se cortan en pantallas sin perder
+  nada.
+
+## Ejemplos nuevos
+- **CASTILLO** (castillo_zx): plataformas pantalla a pantalla con 9 salas en una rejilla de 4 x 3.
+- **SELVA ZX** (selva_zx): acción cenital con scroll libre, rejilla de 4 x 3 con dos pantallas quitadas
+  y fondo negro sobre verde.
+
+Se generan con `python ejemplos_2d.py`.
+
+## Motor
+- Variantes D y C nuevas. Los bloques «;@ SOLO» se pueden anidar.
+- Las variantes V, H y B no cambian (el binario es idéntico).
+
+# Versión 11: fuente española, tiles de 8×8 y tiles de profundidad
+
+## Fuente española de serie
+
+- El motor trae una fuente de letras gruesas con **á é í ó ú ñ Á É Í Ó Ú Ñ ¿ ¡**. Los textos se
+  escriben con sus tildes y salen tal cual.
+- Esas letras ocupan el sitio de `# $ % & @ [ \ ] ^ _ ` { } ~`, que con esta fuente no se pueden
+  escribir. La ü sale como u.
+- En **Partida → Fuente**: *Española (de serie)*, *La de la ROM* (sin tildes), *Importar…* y
+  *Exportar…*. Una fuente propia con las letras españolas en el mismo sitio se marca con la casilla
+  de debajo.
+
+## Tiles de 8×8
+
+- Casilla **Tiles de 8×8** en la pestaña Scroll, para los cinco tipos de scroll. Al activarla, cada
+  tile se parte en sus 4 caracteres y el mapa pasa a tener el doble de filas y columnas.
+- Sólido, plataforma, mortal, rompible, objeto, puerta y profundidad se miran carácter a carácter
+  (comprobado en el emulador: muros de 8 píxeles, objetos de 8×8 que se recogen solos, suelos a
+  media altura de un tile, en las variantes V, H, B, D y C).
+- El motor dibuja los grupos de 2×2 caracteres como tiles de 16×16: la velocidad no cambia.
+  Límite: 256 grupos distintos (128 con scroll horizontal fino); la pestaña Mapa los cuenta.
+
+## Tiles de profundidad
+
+- Un tile de profundidad tapa a los personajes (dibujo, tinta y papel del tile), salvo que sus
+  líneas digan otra cosa:
+  - **Tras**: si el borde elegido del personaje queda por debajo, se ve el personaje.
+  - **Ante**: si queda por debajo o en la línea, se ve el tile; si queda por encima, el personaje.
+- Las líneas son rectas o diagonales, se dibujan con dos clics en el editor de tiles y pueden
+  salirse del tile. El borde puede ser inferior, superior, izquierdo o derecho.
+- **Se traspasa**: sin ella, ese borde de los personajes no cruza la línea (vallas, barandillas,
+  rampas en plataformas).
+- El tile se redibuja píxel a píxel solo en el trozo que tapa al personaje. Con color propio de
+  los personajes también se devuelve el color del tile a esas casillas.
+
+## Otros cambios
+
+- **Color propio de los personajes también en el scroll libre**: conservan su tinta sobre el papel
+  del fondo.
+- Corregido: en el scroll libre con gravedad, las plataformas se pisaban mal en algunos casos.
+- Las fases se reparten mejor por los bancos: si no caben por orden, se colocan de la más grande a
+  la más pequeña, cada una en el hueco más justo.
+- Nuevo ejemplo **JUNGLA 8x8** (`ejemplos_v11.py`): vertical, mapa de 8×8, árboles y columnas por
+  los que se pasa por detrás y vallas que no se cruzan.
+- Las 14 cintas de ejemplo anteriores se han regenerado y probado con el motor nuevo.
+
+## Versión 11.1
+
+- **Lado que cuenta** en cada línea de profundidad: «cuenta debajo» o «cuenta encima» (bordes
+  inferior y superior), «cuenta a la derecha» o «cuenta a la izquierda» (izquierdo y derecho).
+  Unas rayitas en el dibujo del tile señalan ese lado.
+- Al cambiar el borde de una línea, la línea de partida se coloca en ese lado del tile (antes, con
+  el borde superior o el derecho, la línea seguía abajo o a la izquierda). Las líneas que se salen
+  del tile se marcan en el borde del dibujo.
+- Las vallas de los ejemplos usan una línea **Tras** que no se traspasa: desde el sur se ve al
+  personaje delante, desde el norte detrás, y nadie la cruza.
+- Nuevo ejemplo **ALDEA ZX** (`ejemplos_v12.py`): scroll libre, tinta propia de cada personaje,
+  casas en las que se entra (el tejado tapa a la protagonista), llaves bajo los tejados, huertos con
+  vallas y árboles.
+- **Archivo → Ejemplos** lista los 16 juegos de ejemplo, agrupados por tipo de scroll.

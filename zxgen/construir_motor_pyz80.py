@@ -3,8 +3,9 @@ El cargador y el reproductor PT3 no cambian: se conservan los que ya hay en moto
 pyz80 no entiende algunas cosas de pasmo (rept/endm, 'equ' sin dos puntos, caracteres entre
 comillas simples, 'end'), así que el fuente se adapta antes. Comprobado: con el motor.asm original
 el resultado es idéntico byte a byte al que da pasmo.
-Hay tres variantes del motor, una por tipo de scroll, y cada juego lleva solo la suya:
-  V  vertical;  H  horizontal o plataformas de 8 en 8;  B  horizontal o plataformas fino (bloques).
+Hay cinco variantes del motor, una por tipo de scroll, y cada juego lleva solo la suya:
+  V  vertical;  H  horizontal o plataformas de 8 en 8;  B  horizontal o plataformas fino (bloques);
+  D  pantalla a pantalla;  C  scroll libre en 8 direcciones, pixel a pixel (fondo de dos colores).
 En motor.asm, lo que solo hace falta en algunas va entre «;@ SOLO <variantes>» y «;@ FIN». Las
 etiquetas que se quitan apuntan a stub_nada (un ret): solo se usan en ramas que esa variante no
 ejecuta nunca.
@@ -14,6 +15,8 @@ import os, re, sys, pickle, subprocess, tempfile
 AQUI = os.path.dirname(os.path.abspath(__file__))
 ASM = os.path.join(AQUI, 'asm')
 FIN = 0xBE00                     # tabla IM2: el motor y sus variables tienen que acabar antes
+LIMITE_APARTE = {'B': 0x7A00,    # bloques: tras los bloques (que se limitan si hay profundidad), antes de SCRATCH
+                 'C': 0x8400}    # libre: 0x8000-0x83FF (no usa ABUF), antes de LTAB
 
 
 def adaptar(src):
@@ -54,26 +57,36 @@ def adaptar(src):
     return '\n'.join(expandir(0)[0])
 
 
-VARIANTES = ('V', 'H', 'B')
+VARIANTES = ('V', 'H', 'B', 'D', 'C')
 
 
 def filtrar(src, variante):
     """Quita los bloques «;@ SOLO ...» que no son de la variante (None = no quita nada)."""
     if variante is None: return src
-    salida, quitadas, dentro = [], [], None
+    salida, quitadas, pila = [], [], []          # (los bloques se pueden anidar)
+    aparte, dir_aparte, destino = [], None, None
     for linea in src.split('\n'):
+        m = re.match(r';@ APARTE (.*)', linea)
+        if m:                                     # «;@ APARTE <variante> <dir> ...»: en esas variantes
+            d = m.group(1).split()                # el trozo va fuera del motor, en esa direccion
+            d = dict(zip(d[::2], d[1::2]))
+            if variante in d: destino, dir_aparte = aparte, d[variante]
+            continue
+        if linea.startswith(';@ FINAPARTE'): destino = None; continue
         m = re.match(r';@ SOLO (.*)', linea)
-        if m: dentro = m.group(1).split(); continue
-        if linea.startswith(';@ FIN'): dentro = None; continue
-        if dentro is not None and variante not in dentro and not re.match(r'^[A-Za-z_]\w*\s+equ\b', linea, re.I):
+        if m: pila.append(m.group(1).split()); continue
+        if linea.startswith(';@ FIN'): pila.pop(); continue
+        fuera = any(variante not in d for d in pila)
+        if fuera and not re.match(r'^[A-Za-z_]\w*\s+equ\b', linea, re.I):
             e = re.match(r'^([A-Za-z_]\w*):', linea)
             if e: quitadas.append(e.group(1))
             continue
-        salida.append(linea)
+        (salida if destino is None else destino).append(linea)
     definidas = {m.group(1) for l in salida for m in [re.match(r'^([A-Za-z_]\w*):', l)] if m}
     quitadas = [e for e in dict.fromkeys(quitadas) if e not in definidas]
     fin = max(i for i, l in enumerate(salida) if re.match(r'^\s*end\s*$', l.split(';')[0]) or i == len(salida) - 1)
-    salida[fin:fin] = [f'{e} equ stub_nada' for e in quitadas]
+    salida[fin:fin] = [f'{e} equ stub_nada' for e in quitadas] + (
+        [f'        org {dir_aparte}', 'aparte_ini:'] + aparte + ['aparte_fin:'] if aparte else [])
     return '\n'.join(salida)
 
 
@@ -94,15 +107,25 @@ def ensamblar(nombre, variante=None):
 if __name__ == '__main__':
     org = re.search(r'^\s+org\s+0x([0-9A-Fa-f]+)', open(os.path.join(ASM, 'motor.asm')).read(), re.M)
     dir_motor = int(org.group(1), 16)
-    motores, simbolos = {}, {}
+    motores, simbolos, apartes = {}, {}, {}
     for v in VARIANTES:
         datos, sym = ensamblar('motor', v)
         fin = sym['fin_motor']
         if fin > FIN:
             raise SystemExit(f'El motor {v} no cabe: acaba en 0x{fin:04X} (máximo 0x{FIN:04X}).')
-        motores[v] = datos.ljust(fin - dir_motor, b'\x00')     # las variables 'ds' del final, a cero
+        extra = b''
+        if 'aparte_ini' in sym:                  # trozo aparte: va detras en el binario de pyz80
+            la = sym['aparte_fin'] - sym['aparte_ini']
+            extra = datos[len(datos) - la:]
+            datos = datos[:len(datos) - la]
+            apartes[v] = (sym['aparte_ini'], extra)
+            if sym['aparte_fin'] > LIMITE_APARTE[v]:
+                raise SystemExit(f'El trozo aparte del motor {v} no cabe: acaba en 0x{sym["aparte_fin"]:04X} '
+                                 f'(máximo 0x{LIMITE_APARTE[v]:04X}).')
+        motores[v] = datos.ljust(fin - dir_motor, b'\x00')[:fin - dir_motor]   # 'ds' del final, a cero
         simbolos[v] = sym
-        print(f'motor {v}: {len(motores[v])} bytes, de 0x{dir_motor:04X} a 0x{fin:04X} (quedan {FIN - fin} bytes)')
+        print(f'motor {v}: {len(motores[v])} bytes, de 0x{dir_motor:04X} a 0x{fin:04X} (quedan {FIN - fin} bytes)'
+              + (f'; aparte {len(extra)} bytes en 0x{sym["aparte_ini"]:04X}' if extra else ''))
     import motor_bin as viejo
     with open(os.path.join(AQUI, 'motor_bin.py'), 'w') as f:
         f.write('# Generado por construir_motor_pyz80.py. No editar a mano.\n')
@@ -117,5 +140,7 @@ if __name__ == '__main__':
         volcar('PT3PLAYER', viejo.PT3PLAYER)
         for v in VARIANTES: volcar(f'MOTOR_{v}', motores[v])
         f.write('MOTORES = {' + ', '.join(f"'{v}': MOTOR_{v}" for v in VARIANTES) + '}\n')
+        f.write('# trozos del motor que van fuera de su sitio (solo si el juego los usa): variante -> (dirección, bytes)\n')
+        f.write('APARTES = {' + ', '.join(f"'{v}': (0x{a:04X}, bytes.fromhex('{b.hex()}'))" for v, (a, b) in apartes.items()) + '}\n')
         f.write('MOTOR = MOTOR_B   # (compatibilidad)\n')
         f.write(f"SPRITE_NL = 0x{simbolos['B']['sprite_nl']:04X}   # rutina de cambio de línea para sprites compilados (variante B)\n")

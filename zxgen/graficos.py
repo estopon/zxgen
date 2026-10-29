@@ -84,10 +84,12 @@ def bytes_sprite(pix):
 
 # ---------- imágenes para el editor ----------
 def imagen_tile(t, escala=1):
-    img = Image.new('RGB', (16, 16)); px = img.load()
-    for y in range(16):
-        for x in range(16):
-            a = t['atr'][(y // 8) * 2 + x // 8]
+    """Imagen de un tile de 16x16 (4 colores) o de 8x8 (uno)."""
+    n = len(t['pix'])
+    img = Image.new('RGB', (n, n)); px = img.load()
+    for y in range(n):
+        for x in range(n):
+            a = t['atr'][(y // 8) * 2 + x // 8] if n == 16 else t['atr'][0]
             tinta, papel, br = partes_atr(a)
             c = t['pix'][y][x]
             if c == 'm':
@@ -95,7 +97,7 @@ def imagen_tile(t, escala=1):
                 px[x, y] = tuple((u + v) // 2 for u, v in zip(ti, pa))
             else:
                 px[x, y] = PALETA[(tinta if c == 'X' else papel) + 8 * br]
-    return img.resize((16 * escala, 16 * escala), Image.NEAREST) if escala != 1 else img
+    return img.resize((n * escala, n * escala), Image.NEAREST) if escala != 1 else img
 
 def imagen_sprite(pix, escala=1, fondo=(0, 0, 0), tinta=(255, 255, 255), contorno=(0, 0, 0)):
     h, w = len(pix), len(pix[0])

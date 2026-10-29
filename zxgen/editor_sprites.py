@@ -186,8 +186,8 @@ class EditorSprites(ttk.Frame):
         p = self.app.proyecto
         fondo = Image.new('RGB', (40, 40))           # cabe un sprite de hasta 32 de alto
         t = graficos.imagen_tile(p['tiles'][0])
-        for ox in (0, 16, 32):
-            for oy in (0, 16, 32):
+        for ox in range(0, 40, t.width):
+            for oy in range(0, 40, t.width):
                 fondo.paste(t, (ox, oy))
         tinta, papel, br = graficos.partes_atr(p['tiles'][0]['atr'][0])
         col = self.personaje.get('color', 0) if self._tipo_sel() != 'bala' else 0
